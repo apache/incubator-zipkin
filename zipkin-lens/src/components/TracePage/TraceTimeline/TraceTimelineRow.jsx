@@ -14,7 +14,7 @@
 import PropTypes from 'prop-types';
 import React, { useMemo, useCallback } from 'react';
 import classnames from 'classnames';
-import { withStyles } from '@material-ui/styles';
+import { makeStyles } from '@material-ui/styles';
 
 import {
   spanBarRowOffsetY,
@@ -39,10 +39,9 @@ const propTypes = {
   isFocused: PropTypes.bool.isRequired,
   startTs: PropTypes.number.isRequired,
   endTs: PropTypes.number.isRequired,
-  classes: PropTypes.shape({}).isRequired,
 };
 
-const style = theme => ({
+const useStyles = makeStyles(theme => ({
   line: {
     stroke: theme.palette.grey[400],
     strokeWidth: '1px',
@@ -64,18 +63,21 @@ const style = theme => ({
   text: {
     fontSize: '1.03rem',
   },
-});
+}));
 
 const calculateLeftAndWidth = (startTs, endTs, spanDuration, spanTimestamp) => {
   const duration = endTs - startTs;
   if (spanDuration) {
     return {
       width: Math.max(spanDuration / duration * 100, minWidth),
-      left: (spanTimestamp - startTs) / duration * 100,
+      // If the span's timestamp is not set, it is impossible to determine
+      // where the span should be placed.
+      // So set 0 value as a dummy value.
+      left: spanTimestamp ? (spanTimestamp - startTs) / duration * 100 : 0,
     };
   }
-  // If duration is 0, it can be considered that this span is the only
-  // span displayed on the trace timeline graph.
+  // If duration is 0, it can be considered that the trace graph contains
+  // only single span.
   // In that case, width should be 100% and left should be 0%.
   if (duration === 0) {
     return {
@@ -83,11 +85,14 @@ const calculateLeftAndWidth = (startTs, endTs, spanDuration, spanTimestamp) => {
       left: 0,
     };
   }
-  // Even if the span doesn't have duration, should give the span the width
-  // to display it in the UI.
+  // Even if the span doesn't have duration, minWidth should be given to the span
+  // as its width to display the span bar in UI.
   return {
     width: minWidth,
-    left: (spanTimestamp - startTs) / duration * 100,
+    // If the span's timestamp is not set, it is impossible to determine
+    // where the span should be placed.
+    // So set 0 value as a dummy value.
+    left: spanTimestamp ? (spanTimestamp - startTs) / duration * 100 : 0,
   };
 };
 
@@ -98,15 +103,20 @@ const TraceTimelineRow = React.memo(({
   isFocused,
   startTs,
   endTs,
-  classes,
 }) => {
+  const classes = useStyles();
   const { left, width } = useMemo(
     () => calculateLeftAndWidth(startTs, endTs, span.duration, span.timestamp),
     [startTs, endTs, span.duration, span.timestamp],
   );
   const handleClick = useCallback(() => onRowClick(span.spanId), [onRowClick, span.spanId]);
   const durationStr = span.durationStr ? `[${span.durationStr}]` : '';
-  const isTextLeft = endTs - span.timestamp > (endTs - startTs) / 2;
+  const isTextLeft = useMemo(() => {
+    if (span.timestamp) {
+      return endTs - span.timestamp > (endTs - startTs) / 2;
+    }
+    return true;
+  }, [startTs, endTs, span.timestamp]);
 
   return (
     <g>
@@ -163,4 +173,4 @@ const TraceTimelineRow = React.memo(({
 
 TraceTimelineRow.propTypes = propTypes;
 
-export default withStyles(style)(TraceTimelineRow);
+export default TraceTimelineRow;

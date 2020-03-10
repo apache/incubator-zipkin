@@ -42,7 +42,7 @@ export const detailedSpanPropTypes = PropTypes.shape({
   childIds: PropTypes.arrayOf(PropTypes.string).isRequired,
   serviceName: PropTypes.string.isRequired,
   serviceNames: PropTypes.arrayOf(PropTypes.string).isRequired,
-  timestamp: PropTypes.number.isRequired,
+  timestamp: PropTypes.number,
   duration: PropTypes.number,
   durationStr: PropTypes.string,
   tags: spanTagsPropTypes.isRequired,

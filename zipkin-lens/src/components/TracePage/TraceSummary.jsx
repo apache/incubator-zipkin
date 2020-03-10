@@ -37,6 +37,12 @@ const TraceSummary = React.memo(({ traceSummary }) => {
   const [childrenHiddenSpanIndices, setChildrenHiddenSpanIndices] = useState({});
   const [isSpanDetailOpened, setIsSpanDetailOpened] = useState(true);
   const traceTimelineWidthPercent = isSpanDetailOpened ? 60 : 100;
+  const traceTimestamp = useMemo(() => {
+    if (traceSummary.spans && traceSummary.spans.length > 0 && traceSummary.spans[0].timestamp) {
+      return traceSummary.spans[0].timestamp;
+    }
+    return 0; // Unfortunately, valid timestamps are not set.
+  }, [traceSummary.spans]);
 
   const handleChildrenToggle = useCallback((spanId) => {
     const spanIndex = findSpanIndex(traceSummary.spans, spanId);
@@ -52,6 +58,7 @@ const TraceSummary = React.memo(({ traceSummary }) => {
 
   const handleTimelineRowClick = useCallback((spanId) => {
     const idx = traceSummary.spans.findIndex(span => span.spanId === spanId);
+    // When the currently selected span is clicked again, set RootSpanIndex back to 0.
     if (isRootedTrace && currentSpanIndex === idx) {
       if (rootSpanIndex === idx) {
         setRootSpanIndex(0);
@@ -64,14 +71,15 @@ const TraceSummary = React.memo(({ traceSummary }) => {
   }, [currentSpanIndex, isRootedTrace, traceSummary.spans, rootSpanIndex]);
 
   const rerootedTree = useMemo(() => {
-    // If the trace does not have a root span, the trace is not filtered anymore
-    // and the entire trace should be displayed.
+    // If the trace tree does not have any root spans, Reroot feature is not
+    // provided and the entire trace graph is always drawn.
     if (!isRootedTrace) {
       return traceSummary.spans;
     }
-
     const rootSpan = traceSummary.spans[rootSpanIndex];
     const spans = [rootSpan];
+    // Find a span with a depth value less than or equal to the root span's depth.
+    // The span is not a child of the current root span.
     for (let i = rootSpanIndex + 1; i < traceSummary.spans.length; i += 1) {
       const span = traceSummary.spans[i];
       if (span.depth <= rootSpan.depth) {
@@ -109,15 +117,28 @@ const TraceSummary = React.memo(({ traceSummary }) => {
     [traceSummary.spans, childrenHiddenSpanIndices],
   );
 
-  // Find the minumum and maximum timestamps in the shown spans.
-  const startTs = useMemo(() => minBy(rerootedTree, 'timestamp').timestamp, [rerootedTree]);
-  const endTs = useMemo(() => rerootedTree.map((span) => {
-    let ts = span.timestamp;
-    if (span.duration) {
-      ts += span.duration;
-    }
-    return ts;
-  }).reduce((a, b) => Math.max(a, b)), [rerootedTree]);
+  // Find the minumum and maximum timestamps in shown spans.
+  const { startTs, endTs } = useMemo(() => {
+    const validData = rerootedTree.filter(span => !!span.timestamp).map(span => ({
+      timestamp: span.timestamp,
+      duration: span.duration,
+    }));
+    return {
+      startTs: validData.length === 0
+        ? traceTimestamp
+        : minBy(validData, 'timestamp').timestamp,
+      endTs: validData.length === 0
+        ? traceTimestamp
+        : validData.map(
+          (data) => {
+            if (data.duration) {
+              return data.timestamp + data.duration;
+            }
+            return data.timestamp;
+          },
+        ).reduce((a, b) => Math.max(a, b)),
+    };
+  }, [rerootedTree, traceTimestamp]);
 
   const handleSpanDetailToggle = useCallback(() => {
     setIsSpanDetailOpened(prev => !prev);
@@ -153,8 +174,8 @@ const TraceSummary = React.memo(({ traceSummary }) => {
       <Box height="100%" display="flex">
         <Box width={`${traceTimelineWidthPercent}%`} display="flex" flexDirection="column">
           <TraceTimelineHeader
-            startTs={startTs - traceSummary.spans[0].timestamp}
-            endTs={endTs - traceSummary.spans[0].timestamp}
+            startTs={startTs - traceTimestamp}
+            endTs={endTs - traceTimestamp}
             isRerooted={isRerooted}
             isRootedTrace={isRootedTrace}
             onResetRerootButtonClick={handleResetRerootButtonClick}
