@@ -67,6 +67,7 @@
         <configuration>
           <installDirectory>target</installDirectory>
           <nodeVersion>v12.16.2</nodeVersion>
+          <yarnVersion>v1.22.4</yarnVersion>
           <environmentVariables>
             <!--
             create-react-app runs tests in watch mode unless this is defined. We define it here for running Maven locally.
@@ -76,24 +77,24 @@
         </configuration>
         <executions>
           <execution>
-            <id>install node and npm</id>
+            <id>install node and yarn</id>
             <goals>
-              <goal>install-node-and-npm</goal>
+              <goal>install-node-and-yarn</goal>
             </goals>
           </execution>
           <execution>
-            <id>npm install</id>
+            <id>yarn install</id>
             <goals>
-              <goal>npm</goal>
+              <goal>yarn</goal>
             </goals>
             <configuration>
               <arguments>install</arguments>
             </configuration>
           </execution>
           <execution>
-            <id>npm lint</id>
+            <id>yarn lint</id>
             <goals>
-              <goal>npm</goal>
+              <goal>yarn</goal>
             </goals>
             <phase>compile</phase>
             <configuration>
@@ -101,9 +102,9 @@
             </configuration>
           </execution>
           <execution>
-            <id>npm run build</id>
+            <id>yarn run build</id>
             <goals>
-              <goal>npm</goal>
+              <goal>yarn</goal>
             </goals>
             <phase>compile</phase>
             <configuration>
@@ -111,9 +112,9 @@
             </configuration>
           </execution>
           <execution>
-            <id>npm run test</id>
+            <id>yarn run test</id>
             <goals>
-              <goal>npm</goal>
+              <goal>yarn</goal>
             </goals>
             <phase>test</phase>
             <configuration>
