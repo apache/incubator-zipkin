@@ -29,13 +29,20 @@ import {
   Collapse,
   Typography,
   ButtonGroup,
+  Switch,
 } from '@material-ui/core';
 import ExpandLessIcon from '@material-ui/icons/ExpandLess';
 import ExpandMoreIcon from '@material-ui/icons/ExpandMore';
 import SettingsIcon from '@material-ui/icons/Settings';
 import { Autocomplete } from '@material-ui/lab';
 import moment from 'moment';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useState,
+} from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useHistory, useLocation } from 'react-router-dom';
 import styled from 'styled-components';
@@ -43,6 +50,7 @@ import styled from 'styled-components';
 import Criterion, { newCriterion } from './Criterion';
 import LookbackMenu from './LookbackMenu';
 import SearchBar from './SearchBar';
+import ServiceScatterChart from './ServiceScatterChart';
 import TraceSummaryTable from './TraceSummaryTable';
 import { Lookback, fixedLookbackMap, millisecondsToValue } from './lookback';
 import { useUiConfig } from '../UiConfig';
@@ -503,6 +511,11 @@ const DiscoverPageContent: React.FC<DiscoverPageContentProps> = ({
     setIsOpeningSettings((prev) => !prev);
   }, []);
 
+  const [openServiceScatterChart, toggleOpenServiceScatterChart] = useReducer(
+    (state: boolean) => !state,
+    false,
+  );
+
   const {
     filters,
     handleFiltersChange,
@@ -660,13 +673,12 @@ const DiscoverPageContent: React.FC<DiscoverPageContentProps> = ({
                     <Trans>{filteredTraceSummaries.length} Results</Trans>
                   )}
                 </Typography>
-
                 <Box display="flex">
                   <ButtonGroup>
                     <Button onClick={expandAll}>Expand All</Button>
                     <Button onClick={collapseAll}>Collapse All</Button>
                   </ButtonGroup>
-                  <Box width={300} ml={2}>
+                  <Box width={300} ml={2} mr={2}>
                     <Autocomplete
                       multiple
                       value={filters}
@@ -684,8 +696,19 @@ const DiscoverPageContent: React.FC<DiscoverPageContentProps> = ({
                       onChange={handleFiltersChange}
                     />
                   </Box>
+                  <Switch
+                    checked={openServiceScatterChart}
+                    onChange={toggleOpenServiceScatterChart}
+                  />
                 </Box>
               </Box>
+              <Collapse in={openServiceScatterChart}>
+                <Box width="100%" height={180} pt={1} pb={1} pl={4} pr={4}>
+                  <ServiceScatterChart
+                    traceSummaries={filteredTraceSummaries}
+                  />
+                </Box>
+              </Collapse>
             </Container>
           </>
         )}
