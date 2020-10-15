@@ -205,10 +205,15 @@ public final class HttpCall<V> extends Call.Base<V> {
     final HttpResponse response;
     try (SafeCloseable ignored =
            Clients.withContextCustomizer(ctx -> ctx.logBuilder().name(name))) {
-      HttpRequestWriter httpRequest = HttpRequest.streaming(request.headers());
-      response = httpClient.execute(httpRequest);
-      request.writeBody(httpRequest::tryWrite);
-      httpRequest.close();
+      final RequestHeaders headers = request.headers();
+      if (headers.isEndOfStream()) {
+        response = httpClient.execute(headers);
+      } else {
+        HttpRequestWriter httpRequest = HttpRequest.streaming(headers);
+        response = httpClient.execute(httpRequest);
+        request.writeBody(httpRequest::tryWrite);
+        httpRequest.close();
+      }
     }
     CompletableFuture<AggregatedHttpResponse> responseFuture =
       RequestContext.mapCurrent(
