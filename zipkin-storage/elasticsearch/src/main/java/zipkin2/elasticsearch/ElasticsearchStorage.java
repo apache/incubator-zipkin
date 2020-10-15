@@ -301,6 +301,7 @@ public abstract class ElasticsearchStorage extends zipkin2.storage.StorageCompon
     try {
       version(); // ensure the version is available (even if we already cached it)
       ensureIndexTemplates(); // called only once, so we have to double-check health
+      // Set endOfStream true so that the client always receives the response after the request is fully sent.
       final RequestHeaders requestHeaders = RequestHeaders.builder(GET, "/_cluster/health/" + index)
                                                           .endOfStream(true)
                                                           .build();
