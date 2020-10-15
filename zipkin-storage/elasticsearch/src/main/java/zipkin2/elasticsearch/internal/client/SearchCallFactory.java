@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2020 The OpenZipkin Authors
+ * Copyright 2015-2019 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -39,7 +39,7 @@ public class SearchCallFactory {
         RequestHeaders.of(
           HttpMethod.POST, lenientSearch(request.indices, request.type),
           HttpHeaderNames.CONTENT_TYPE, MediaType.JSON_UTF_8),
-        HttpData.wrap(OBJECT_MAPPER.writeValueAsBytes(request)).withEndOfStream());
+        HttpData.wrap(OBJECT_MAPPER.writeValueAsBytes(request)));
     } catch (JsonProcessingException e) {
       throw new AssertionError("Could not serialize SearchRequest to bytes.", e);
     }

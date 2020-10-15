@@ -210,9 +210,9 @@ public final class HttpCall<V> extends Call.Base<V> {
         response = httpClient.execute(headers);
       } else {
         HttpRequestWriter httpRequest = HttpRequest.streaming(headers);
-        response = httpClient.execute(httpRequest);
         request.writeBody(httpRequest::tryWrite);
         httpRequest.close();
+        response = httpClient.execute(httpRequest);
       }
     }
     CompletableFuture<AggregatedHttpResponse> responseFuture =
