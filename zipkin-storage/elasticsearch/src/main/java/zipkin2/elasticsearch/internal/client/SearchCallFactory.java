@@ -39,7 +39,7 @@ public class SearchCallFactory {
         RequestHeaders.of(
           HttpMethod.POST, lenientSearch(request.indices, request.type),
           HttpHeaderNames.CONTENT_TYPE, MediaType.JSON_UTF_8),
-        HttpData.wrap(OBJECT_MAPPER.writeValueAsBytes(request)));
+        HttpData.wrap(OBJECT_MAPPER.writeValueAsBytes(request)).withEndOfStream());
     } catch (JsonProcessingException e) {
       throw new AssertionError("Could not serialize SearchRequest to bytes.", e);
     }
