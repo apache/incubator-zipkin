@@ -45,6 +45,13 @@
       <groupId>com.squareup.moshi</groupId>
       <artifactId>moshi</artifactId>
       <version>1.11.0</version>
+      <exclusions>
+        <!-- let wire control the okio version -->
+        <exclusion>
+          <groupId>com.squareup.okio</groupId>
+          <artifactId>okio</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
 
     <dependency>
