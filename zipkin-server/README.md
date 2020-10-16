@@ -605,7 +605,7 @@ See [docker-zipkin](https://github.com/openzipkin/docker-zipkin) for details.
 To build and run the server from the currently checked out source, enter the following.
 ```bash
 # Build the server and also make its dependencies
-$ ./mvnw -q --batch-mode -DskipTests -Dlicense.skip=true --also-make -pl zipkin-server clean package
+$ ./mvnw -T1C -q --batch-mode -DskipTests -Dlicense.skip=true --also-make -pl zipkin-server clean package
 # Run the server
 $ java -jar ./zipkin-server/target/zipkin-server-*exec.jar
 # or Run the slim server

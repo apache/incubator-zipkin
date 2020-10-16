@@ -12,6 +12,8 @@
 # the License.
 #
 
+ARG java_version
+
 # We copy files from the context into a scratch container first to avoid a problem where docker and
 # docker-compose don't share layer hashes https://github.com/docker/compose/issues/883 normally.
 # COPY --from= works around the issue.
@@ -30,7 +32,7 @@ COPY --from=scratch /install/install.sh /tmp/
 RUN /tmp/install.sh && rm /tmp/install.sh
 
 # Share the same base image to reduce layers used in testing
-FROM openzipkin/java:15.0.0-15.27.17-jre
+FROM openzipkin/java:${java_version}-jre as zipkin-kafka
 
 # Add HEALTHCHECK and ENTRYPOINT scripts into the default search path
 COPY --from=scratch /docker-bin/* /usr/local/bin/

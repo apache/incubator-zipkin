@@ -12,6 +12,8 @@
 # the License.
 #
 
+ARG alpine_version
+
 # We copy files from the context into a scratch container first to avoid a problem where docker and
 # docker-compose don't share layer hashes https://github.com/docker/compose/issues/883 normally.
 # COPY --from= works around the issue.
@@ -21,7 +23,7 @@ COPY zipkin-storage/mysql-v1/src/main/resources/mysql.sql /zipkin-schemas/
 COPY docker/storage/mysql/install.sh /install/
 COPY docker/storage/mysql/docker-bin/* /docker-bin/
 
-FROM alpine:3.12 as install
+FROM alpine:${alpine_version} as install
 
 WORKDIR /install
 
@@ -30,7 +32,7 @@ COPY --from=scratch /install/install.sh /tmp/
 RUN /tmp/install.sh && rm /tmp/install.sh
 
 # Use a small base image at runtime
-FROM alpine:3.12
+FROM alpine:${alpine_version} as zipkin-mysql
 
 # Add the mysql binary and handle installation edge cases
 RUN apk add --no-cache mysql && \

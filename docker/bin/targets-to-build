@@ -1,0 +1,6 @@
+#!/bin/sh
+
+set -ue
+
+# Finds all the images we would build (except zipkin-builder), ordering zipkin first
+find . -name Dockerfile -exec grep 'as zipkin' {} \;|awk '{print $4}'|sort|uniq|grep -v zipkin-builder

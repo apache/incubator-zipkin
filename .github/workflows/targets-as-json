@@ -1,0 +1,6 @@
+#!/bin/sh
+
+set -ue
+
+# Make a string like: [{"target":"zipkin"},{"target":"zipkin-cassandra"}]
+docker/bin/targets-to-build|sed 's/\(.*\)/{"target":"\1"}/g'| tr '\n' ','|sed 's/\(.*\),$/[\1]/'

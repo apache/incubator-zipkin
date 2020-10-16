@@ -1,3 +1,4 @@
+#!/bin/sh
 #
 # Copyright 2015-2020 The OpenZipkin Authors
 #
@@ -12,22 +13,21 @@
 # the License.
 #
 
-# This file uses the version 2 docker-compose file format, described here:
-# https://docs.docker.com/compose/compose-file/#version-2
-#
-# It extends the default configuration from docker-compose.yml, hosting the
-# ui on port 80 using NGINX
+# HEALTHCHECK for use in `docker ps` or `docker-compose ps`.
+# It can also be used as a readiness probe in k8s
 
-version: '2.4'
+# Fail on unset variables, but don't quit on rc!=0, so we can log what happened
+set -u +e
 
-services:
-  zipkin-ui:
-    image: openzipkin/zipkin-ui:${TAG:-latest}
-    container_name: zipkin-ui
-    environment:
-      # Change this if connecting to a different zipkin server
-      - ZIPKIN_BASE_URL=http://zipkin:9411
-    ports:
-      - 80:80
-    depends_on:
-      - zipkin
+IP="$(hostname -i || echo '127.0.0.1')"
+PORT=${QUERY_PORT:-9411}
+
+# Use b3:0 to ensure health checks aren't traced
+HEALTH_OUT=$(wget -qO- http://${IP}:${PORT} --header=b3:0 2>&1)
+HEALTH_RC=$?
+if [ "$HEALTH_RC" == "0" ]; then
+  exit 0
+fi
+
+echo health check failed with code $HEALTH_RC response: ${HEALTH_OUT}
+exit 1

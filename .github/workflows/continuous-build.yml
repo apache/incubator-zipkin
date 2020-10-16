@@ -1,5 +1,9 @@
 name: Continuous Build Server
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - master
+  pull_request:
 
 jobs:
   build:
@@ -16,6 +20,12 @@ jobs:
         uses: actions/checkout@v1
         with:
           fetch-depth: 10
+      # Remove apt repos that are known to break from time to time.
+      # See https://github.com/actions/virtual-environments/issues/323
+      - name: Remove broken apt repos [Ubuntu]
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          for apt_file in `grep -lr microsoft /etc/apt/sources.list.d/`; do sudo rm $apt_file; done
       # Setup latest JDK. We do this to ensure users don't need to use the same version as our
       # release process. Release uses JDK 11, the last version that can target 1.6 bytecode.
       - name: Setup java
@@ -41,7 +51,7 @@ jobs:
         run: ./mvnw -version
         shell: bash
       - name: Execute Server Build
-        run: ./mvnw -q --batch-mode -DskipTests --also-make -pl zipkin-server clean install
+        run: ./mvnw -T1C -q --batch-mode -DskipTests -Dlicense.skip=true --also-make -pl zipkin-server clean package
         shell: bash
         env:
           CI: true

@@ -26,7 +26,7 @@ Zipkin has no dependencies, for example you can run an in-memory zipkin server l
 
 See the ui at (docker ip):9411
 
-In the ui - click zipkin-server, then click "Find Traces".
+In the UI - click zipkin-server, then click "Find Traces".
 
 We also provide [example compose files](examples/README.md) that integrate collectors and storage,
 such as Kafka or Elasticsearch.
@@ -37,9 +37,10 @@ include "cassandra", "mysql" and "elasticsearch".
 
 Note: the `openzipkin/zipkin-slim` image only supports "elasticsearch" storage. To use other storage types, you must use the main image `openzipkin/zipkin`.
 
-When in docker, the following environment variables also apply
+When in Docker, the following environment variables also apply
 
 * `JAVA_OPTS`: Use to set java arguments, such as heap size or trust store location.
+  * By default, `openzipkin/zipkin` sets max heap to 64m while `openzipkin/zipkin-slim` 32m
 * `STORAGE_PORT_9042_TCP_ADDR` -- A Cassandra node listening on port 9042. This
   environment variable is typically set by linking a container running
   `zipkin-cassandra` as "storage" when you start the container.
@@ -54,14 +55,20 @@ When in docker, the following environment variables also apply
   environment variable is typically set by linking a container running
   `zipkin-kafka` as "kafka" when you start the container.
 
-For example, to add debug logging, set JAVA_OPTS as shown in our [docker-compose](docker-compose.yml) file:
+For example, to increase heap size, set `JAVA_OPTS` as shown in our [docker-compose](docker-compose.yml) file:
 ```yaml
-      - JAVA_OPTS=-Dlogging.level.zipkin=DEBUG -Dlogging.level.zipkin2=DEBUG
+    environment:
+      - JAVA_OPTS=-Xms128m -Xmx128m -XX:+ExitOnOutOfMemoryError
+```
+
+For example, to add debug logging, set `command` as shown in our [docker-compose](docker-compose.yml) file:
+```yaml
+    command: --logging.level.zipkin2=DEBUG
 ```
 
 ## Runtime user
 The `openzipkin/zipkin` and `openzipkin/zipkin-slim` images run under a nologin
-user named 'zipkin' with a home directory of '/zipkin'. As this is a distroless
+user named 'zipkin' with a home directory of '/zipkin'. As this is Alpine Linux
 image, you won't find many utilities installed, but you can browse contents
 with a shell like below:
 
@@ -73,24 +80,35 @@ BOOT-INF  META-INF  org       run.sh
 
 ## Notes
 
+### Container links
+If using Docker's deprecated container links, you need to set env variables
+accordingly.
+
+Ex. If your link name is "storage" for an Elasticsearch container:
+```
+  ES_HOSTS=http://$STORAGE_PORT_9200_TCP_ADDR:9200
+```
+
+The above is mentioned only for historical reasons. The OpenZipkin community
+do not support Docker's deprecated container links.
+
+### MySQL
 If using an external MySQL server or image, ensure schema and other parameters match the [docs](https://github.com/openzipkin/zipkin/tree/master/zipkin-storage/mysql-v1#applying-the-schema).
 
 ## Building images
 
-To build `openzipkin/zipkin`, from the top level of the repository, run:
-
+To build `openzipkin/zipkin:test`, from the top level of the repository, run:
 ```bash
-$ docker build -t openzipkin/zipkin:test -f docker/Dockerfile .
+$ docker/build_image zipkin
 ```
 
-If you want the slim distribution instead, run:
-
+If you want the slim distribution (openzipkin/zipkin-slim:test), run:
 ```bash
-$ docker build -t openzipkin/zipkin-slim:test -f docker/Dockerfile . --target zipkin-slim
+$ docker/build_image zipkin-slim
 ```
 
-If you want the NGINX UI proxy instead, run:
-
+If you want the NGINX UI proxy (openzipkin/zipkin-ui:test), run:
 ```bash
-$ docker build -t openzipkin/zipkin-ui:test -f docker/Dockerfile . --target zipkin-ui
+$ docker/build_image zipkin-ui
 ```
+

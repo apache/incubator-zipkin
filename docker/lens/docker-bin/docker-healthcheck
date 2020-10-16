@@ -13,14 +13,20 @@
 # the License.
 #
 
-if [ -f ".${STORAGE_TYPE}_profile" ]; then
-  source ${PWD}/.${STORAGE_TYPE}_profile
+# HEALTHCHECK for use in `docker ps` or `docker-compose ps`.
+# It can also be used as a readiness probe in k8s
+
+# Fail on unset variables, but don't quit on rc!=0, so we can log what happened
+set -u +e
+
+IP="$(hostname -i || echo '127.0.0.1')"
+
+# Use b3:0 to ensure health checks aren't traced
+HEALTH_OUT=$(wget -qO- http://${IP}/health --header=b3:0 2>&1)
+HEALTH_RC=$?
+if [ "$HEALTH_RC" == "0" ]; then
+  exit 0
 fi
 
-# Use main class directly if there are no modules, as it measured 14% faster from JVM running to available
-# verses PropertiesLauncher when using Zipkin was based on Spring Boot 2.1
-if [[ -z "$MODULE_OPTS" ]]; then
-  exec java ${JAVA_OPTS} -cp '.:BOOT-INF/lib/*:BOOT-INF/classes' zipkin.server.ZipkinServer
-else
-  exec java ${MODULE_OPTS} ${JAVA_OPTS} -cp . org.springframework.boot.loader.PropertiesLauncher
-fi
+echo health check failed with code $HEALTH_RC response: ${HEALTH_OUT}
+exit 1

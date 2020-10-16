@@ -23,30 +23,38 @@
 version: '2.4'
 
 services:
-  # The zipkin process services the UI, and also exposes a POST endpoint that
-  # instrumentation can send trace data to.
+  storage:
+    image: openzipkin/zipkin-mysql:${TAG:-latest}
+    container_name: mysql
+    # Uncomment to expose the storage port for testing
+    # ports:
+    #   - 3306:3306
+
+  # Use MySQL instead of in-memory storage
   zipkin:
-    image: openzipkin/zipkin-slim
-    container_name: zipkin
-    # Environment settings are defined here https://github.com/openzipkin/zipkin/blob/master/zipkin-server/README.md#environment-variables
+    extends:
+      file: docker-compose.yml
+      service: zipkin
+    # slim doesn't include MySQL support, so switch to the larger image
+    image: openzipkin/zipkin:${TAG:-latest}
     environment:
-      - STORAGE_TYPE=mem
-      # Uncomment to enable self-tracing
-      # - SELF_TRACING_ENABLED=true
-      # Uncomment to enable debug logging
-      # - JAVA_OPTS=-Dorg.slf4j.simpleLogger.log.zipkin2=debug
-    ports:
-      # Port used for the Zipkin UI and HTTP Api
-      - 9411:9411
+      - STORAGE_TYPE=mysql
+      - MYSQL_HOST=storage
+      # Add the baked-in username and password for the zipkin-mysql image
+      - MYSQL_USER=zipkin
+      - MYSQL_PASS=zipkin
     depends_on:
       - storage
 
-  # Fake services allow us to compose with docker-compose-elasticsearch.yml
-  # BusyBox is pinned to prevent repetitive image pulls for no-op services
-  storage:
-    image: busybox:1.31.0
-    container_name: fake_storage
-
   dependencies:
-    image: busybox:1.31.0
-    container_name: fake_dependencies
+    extends:
+      file: docker-compose-dependencies.yml
+      service: dependencies
+    environment:
+      - STORAGE_TYPE=mysql
+      - MYSQL_HOST=storage
+      # Add the baked-in username and password for the zipkin-mysql image
+      - MYSQL_USER=zipkin
+      - MYSQL_PASS=zipkin
+    depends_on:
+      - storage

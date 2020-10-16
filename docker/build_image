@@ -1,0 +1,59 @@
+#!/bin/sh
+# This script is only a convenience as the build environment is controlled in
+# the Dockerfile. That said, it uses only basic shell commands to help it work
+# on developer laptops as well as CI nodes. Mainly, this centralizes the base
+# Java image mappings and ensures all metadata needed is taken from pom.xml.
+set -ue
+
+TARGET=${1:-zipkin}
+TAG=${2:-test}
+RELEASE_VERSION=${RELEASE_VERSION:-master}
+
+# Try to re-use the same base Alpine Linux version as we do in
+# https://github.com/openzipkin/docker-java/blob/master/Dockerfile
+ALPINE_VERSION=${ALPINE_VERSION:-3.12}
+
+# When publishing jars, we build with JDK 11 to ensure we can write 1.6 zipkin.jar for Brave.
+# However, when creating Docker images, there's no such requirement.
+# Hence, we use one version to keep the layer count manageable and centralized here.
+JAVA_VERSION=${JAVA_VERSION:-15.0.0-15.27.17}
+
+case ${TARGET} in
+  zipkin )
+    DOCKERFILE_PATH=docker/Dockerfile
+    ;;
+  zipkin-slim )
+    DOCKERFILE_PATH=docker/Dockerfile
+    ;;
+  zipkin-ui )
+    DOCKERFILE_PATH=docker/Dockerfile
+    ;;
+  zipkin-kafka )
+    DOCKERFILE_PATH=docker/collector/kafka/Dockerfile
+    ;;
+  zipkin-cassandra )
+    DOCKERFILE_PATH=docker/storage/cassandra/Dockerfile
+    # Until Cassandra v4, we are stuck on JRE 8 for Cassandra
+    JAVA_VERSION=1.8.0_252-b09
+    ;;
+  zipkin-elasticsearch6 )
+    DOCKERFILE_PATH=docker/storage/elasticsearch6/Dockerfile
+    ;;
+  zipkin-elasticsearch7 )
+    DOCKERFILE_PATH=docker/storage/elasticsearch7/Dockerfile
+    ;;
+  zipkin-mysql )
+    DOCKERFILE_PATH=docker/storage/mysql/Dockerfile
+    ;;
+  * )
+    echo "Invalid TARGET: ${TARGET}"
+    exit 1
+esac
+
+# Build the image
+IMAGE=openzipkin/${TARGET}:${TAG}
+echo Building image ${IMAGE}
+docker build -f "${DOCKERFILE_PATH}" -t ${IMAGE} \
+    --build-arg java_version=${JAVA_VERSION} --build-arg alpine_version=${ALPINE_VERSION} \
+    --build-arg release_version="${RELEASE_VERSION}" \
+    --target ${TARGET} .

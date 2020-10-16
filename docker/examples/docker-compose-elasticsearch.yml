@@ -21,24 +21,33 @@
 version: '2.4'
 
 services:
-  # Run Elasticsearch instead of MySQL
   storage:
-    image: openzipkin/zipkin-elasticsearch7
+    image: openzipkin/zipkin-elasticsearch7:${TAG:-latest}
     container_name: elasticsearch
     # Uncomment to expose the storage port for testing
     # ports:
     #   - 9200:9200
 
-  # Switch storage type to Elasticsearch
+  # Use Elasticsearch instead of in-memory storage
   zipkin:
+    extends:
+      file: docker-compose.yml
+      service: zipkin
     environment:
       - STORAGE_TYPE=elasticsearch
       # Point the zipkin at the storage backend
       - ES_HOSTS=elasticsearch:9200
       # Uncomment to see requests to and from elasticsearch
       # - ES_HTTP_LOGGING=BODY
+    depends_on:
+      - storage
 
   dependencies:
+    extends:
+      file: docker-compose-dependencies.yml
+      service: dependencies
     environment:
       - STORAGE_TYPE=elasticsearch
       - ES_HOSTS=elasticsearch
+    depends_on:
+      - storage

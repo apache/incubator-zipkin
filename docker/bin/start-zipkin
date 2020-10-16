@@ -1,0 +1,37 @@
+#!/bin/sh
+#
+# Copyright 2015-2020 The OpenZipkin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+# in compliance with the License. You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software distributed under the License
+# is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+# or implied. See the License for the specific language governing permissions and limitations under
+# the License.
+#
+
+# ENTRYPOINT script that starts Zipkin
+set -eu
+
+STORAGE_TYPE=${STORAGE_TYPE:-mem}
+
+if [ "${STORAGE_TYPE}" = "mem" ]; then
+  # When using in-memory provider, allocate 128m, most of which for trace storage
+  JAVA_OPTS=${JAVA_OPTS:-"-Xms128m -Xmx128m -XX:+ExitOnOutOfMemoryError"}
+fi
+
+# MODULE_OPTS is not set in the zipkin-slim dist, so use it to detect if this is a slim build
+if [ -z "${MODULE_OPTS+x}" ]; then
+  # Allocate less memory when using the slim build
+  JAVA_OPTS=${JAVA_OPTS:-"-Xms32m -Xmx32m -XX:+ExitOnOutOfMemoryError"}
+
+  # Use main class directly if there are no modules, as it measured 14% faster from JVM running to
+  # available verses PropertiesLauncher when using Zipkin was based on Spring Boot 2.1
+  exec java ${JAVA_OPTS} -cp '.:BOOT-INF/lib/*:BOOT-INF/classes' zipkin.server.ZipkinServer
+else
+  JAVA_OPTS=${JAVA_OPTS:-"-Xms64m -Xmx64m -XX:+ExitOnOutOfMemoryError"}
+  exec java ${MODULE_OPTS} ${JAVA_OPTS} -cp . org.springframework.boot.loader.PropertiesLauncher
+fi

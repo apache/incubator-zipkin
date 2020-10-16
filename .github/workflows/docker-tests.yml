@@ -1,0 +1,59 @@
+name: Continuous Build Docker
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  discover-targets:
+    name: Build target matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout Sources
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 1
+      - id: set-matrix
+        name: Generate outputs.matrix from pom.xml listing
+        run: echo "::set-output name=matrix::{\"include\":$(.github/workflows/targets-as-json)}"
+  build-and-verify-docker:
+    name: Build and verify Docker images
+    needs: discover-targets
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.discover-targets.outputs.matrix) }}
+    steps:
+      # Remove apt repos that are known to break from time to time.
+      # See https://github.com/actions/virtual-environments/issues/323
+      - name: Remove broken apt repos
+        run: |
+          for apt_file in `grep -lr microsoft /etc/apt/sources.list.d/`; do sudo rm $apt_file; done
+      - name: Install Docker
+        uses: docker-practice/actions-setup-docker@master
+        with:
+          docker_version: 19.03
+      - name: Cache docker
+        uses: actions/cache@v1
+        with:
+          path: ~/.docker
+          key: ${{ runner.os }}-docker-${{ hashFiles('**/Dockerfile') }}
+          restore-keys: ${{ runner.os }}-docker
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 1
+      - name: Build Docker image openzipkin/${{ matrix.target }}:test
+        run:  docker/build_image ${{ matrix.target }}
+      - name: Verify Docker image openzipkin/${{ matrix.target }}:test
+        run: |
+          # This just makes sure containers run and the HEALTHCHECK works (for now..)
+          COMPOSE_FILE=./.github/workflows/docker-compose-${{ matrix.target }}.yml
+          if test -f "${COMPOSE_FILE}"; then
+            docker-compose -f "${COMPOSE_FILE}" up -d --quiet-pull
+          else
+            docker run --name sut -d openzipkin/${{ matrix.target }}:test
+          fi
+          docker/bin/block-on-health sut || (docker logs sut && exit 1)

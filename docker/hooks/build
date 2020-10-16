@@ -13,45 +13,38 @@
 # the License.
 #
 
+# This script relies on variables defined by Docker Hub Autobuild
+# https://docs.docker.com/docker-hub/builds/advanced/#environment-variables-for-building-and-testing
+#
+# This script uses /bin/bash, not /bin/sh, because /bin/sh on Docker Hub image uses doesn't allow
+# substitutions like: ${DOCKER_TAG//,/ }
+set -eux
 
-set -v
-
-# Docker Hub's default build command seems to not handle .dockerignore correctly. Doing a simple build command
-# ourselves works fine.
+# Docker Hub's default build command seems to not handle .dockerignore correctly. Doing a simple
+# build command ourselves works fine.
 
 # This hook is called with the current directory set to the same as the Dockerfile, so we go back
 # to top level.
 cd ..
 
-echo "Building images for $SOURCE_BRANCH"
+echo "Building images for ${SOURCE_BRANCH}"
 
-docker build --build-arg source_branch=${SOURCE_BRANCH} -f "$DOCKERFILE_PATH" -t "$IMAGE_NAME" .
+# $SOURCE_BRANCH is something like
+#
+#   master       - Building the master branch. This cut command will return 'master', and Dockerfiles will ignore it
+#   1.0.1        - Building a release image along with a new Zipkin server version. This cut command will return
+#                  '1.0.1' and Dockerfiles will use it to fetch the correct version of Zipkin.
+#   docker-1.0.1 - Building a release image, but not a new Zipkin server. This cut command will return
+#                  '1.0.1' and Dockerfiles will use it to fetch the correct version of Zipkin.
+export RELEASE_VERSION="$(echo "${SOURCE_BRANCH}" | cut -d '-' -f 2)"
+tags=${DOCKER_TAG//,/ }
+tags_0=${DOCKER_TAG//,*/}
 
-IFS=',' read -ra TAGS <<< "$DOCKER_TAG"
-for tag in ${TAGS[@]}; do
-  docker tag "$IMAGE_NAME" "${DOCKER_REPO}:${tag}"
-done
-
-# We always build zipkin-slim
-echo Building zipkin-slim
-docker build --build-arg source_branch=${SOURCE_BRANCH} -f "$DOCKERFILE_PATH" -t "openzipkin/zipkin-slim:${TAGS[0]}" --target zipkin-slim .
-for tag in ${TAGS[@]:1}; do
-  docker tag "openzipkin/zipkin-slim:${TAGS[0]}" "openzipkin/zipkin-slim:$tag"
-done
-
-# We always build test images formerly hosted on https://github.com/openzipkin/docker-zipkin
-echo Building zipkin-ui
-docker build --build-arg source_branch=${SOURCE_BRANCH} -f "$DOCKERFILE_PATH" -t "openzipkin/zipkin-ui:${TAGS[0]}" --target zipkin-ui .
-for tag in ${TAGS[@]:1}; do
-  docker tag "openzipkin/zipkin-ui:${TAGS[0]}" "openzipkin/zipkin-ui:$tag"
-done
-
-# We also build testing images to correspond with the server version to keep schemas up to date
-for path in collector/kafka storage/cassandra storage/elasticsearch6 storage/elasticsearch7 storage/mysql; do
-  image=zipkin-$(basename ${path})
+for target in $(docker/bin/targets-to-build); do
+  image=openzipkin/${target}
   echo Building ${image}
-  docker build --build-arg source_branch=${SOURCE_BRANCH} -f "docker/${path}/Dockerfile" -t "openzipkin/${image}:${TAGS[0]}" .
-  for tag in ${TAGS[@]:1}; do
-    docker tag "openzipkin/${image}:${TAGS[0]}" "openzipkin/${image}:$tag"
+  docker/build_image ${target} ${tags_0}
+  for tag in ${tags}; do
+    docker tag "${image}:${tags_0}" "${image}:${tag}"
   done
 done

@@ -21,16 +21,20 @@
 version: '2.4'
 
 services:
-  # Run Cassandra instead of MySQL
   storage:
-    image: openzipkin/zipkin-cassandra
+    image: openzipkin/zipkin-cassandra:${TAG:-latest}
     container_name: cassandra
     # Uncomment to expose the storage port for testing
     # ports:
     #   - 9042:9042
 
-  # Switch storage type to Cassandra
+  # Use Cassandra instead of in-memory storage
   zipkin:
+    extends:
+      file: docker-compose.yml
+      service: zipkin
+    # slim doesn't include Cassandra support, so switch to the larger image
+    image: openzipkin/zipkin:${TAG:-latest}
     environment:
       - STORAGE_TYPE=cassandra3
       # When using the test docker image, or have schema pre-installed, you don't need to re-install it
@@ -42,6 +46,11 @@ services:
       - storage
 
   dependencies:
+    extends:
+      file: docker-compose-dependencies.yml
+      service: dependencies
     environment:
       - STORAGE_TYPE=cassandra3
       - CASSANDRA_CONTACT_POINTS=cassandra
+    depends_on:
+      - storage

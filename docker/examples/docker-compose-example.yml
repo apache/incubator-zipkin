@@ -1,0 +1,22 @@
+# Format version 2.1 was introduced with Docker Compose v1.9
+# We need Docker Compose v1.9+ for unset variable interpolation
+version: "2.1"
+
+services:
+  # Generate traffic by hitting http://localhost:8081
+  frontend:
+    container_name: frontend
+    image: openzipkin/example-brave:${PROJECT:-armeria}
+    command: frontend
+    ports:
+      - 8081:8081
+    depends_on:
+      - backend
+      - zipkin
+  # Serves the /api endpoint the frontend uses
+  backend:
+    container_name: backend
+    image: openzipkin/example-brave:${PROJECT:-armeria}
+    command: backend
+    depends_on:
+      - zipkin

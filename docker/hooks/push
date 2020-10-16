@@ -13,29 +13,27 @@
 # the License.
 #
 
+# This script relies on variables defined by Docker Hub Autobuild
+# https://docs.docker.com/docker-hub/builds/advanced/#environment-variables-for-building-and-testing
+#
+# This script uses /bin/bash, not /bin/sh, because /bin/sh on Docker Hub image uses doesn't allow
+# substitutions like: ${DOCKER_TAG//,/ }
+set -eux
 
-set -v
-
-if [[ "$DOCKER_REPO" == "index.docker.io/openzipkin/zipkin" ]]; then
-  echo Pushing zipkin-slim and test images
-  IFS=',' read -ra TAGS <<< "$DOCKER_TAG"
-  for tag in ${TAGS[@]}; do
-    docker push "openzipkin/zipkin-slim:$tag"
-    docker push "openzipkin/zipkin-ui:$tag"
-
-    for collector in kafka; do
-      docker push "openzipkin/zipkin-${collector}:$tag"
-    done
-
-    for storage in cassandra elasticsearch6 elasticsearch7 mysql; do
-      docker push "openzipkin/zipkin-${storage}:$tag"
+if [ "${DOCKER_REPO}" = "index.docker.io/openzipkin/zipkin" ]; then
+  for tag in ${DOCKER_TAG//,/ }; do
+    for target in $(docker/bin/targets-to-build); do
+      image="openzipkin/${target}:${tag}"
+      echo Pushing ${image}
+      docker push ${image}
     done
   done
 
-  if [[ "$DOCKER_TAG" == "master" ]]; then
+  if [ "${DOCKER_TAG}" = "master" ]; then
     # We re-push the builder image on master, not on release branches.
     echo Building zipkin-builder
-    docker build -f "$DOCKERFILE_PATH" -t openzipkin/zipkin-builder --target zipkin-builder .
+
+    docker build -f "${DOCKERFILE_PATH}" -t openzipkin/zipkin-builder --target zipkin-builder .
 
     echo Pushing zipkin-builder
     # zipkin-builder is just a cache of maven / npm dependencies, there's no need to version it

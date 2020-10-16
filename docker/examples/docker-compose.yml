@@ -15,92 +15,31 @@
 # This file uses the version 2 docker-compose file format, described here:
 # https://docs.docker.com/compose/compose-file/#version-2
 #
-# This runs the zipkin and zipkin-mysql containers, using docker-compose's
-# default networking to wire the containers together.
+# This runs the zipkin slim container, using docker-compose's default networking
+# to wire other containers together.
 #
 # Note that this file is meant for learning Zipkin, not production deployments.
 
 version: '2.4'
 
 services:
-  storage:
-    image: openzipkin/zipkin-mysql
-    container_name: mysql
-    # Uncomment to expose the storage port for testing
-    # ports:
-    #   - 3306:3306
-
   # The zipkin process services the UI, and also exposes a POST endpoint that
-  # instrumentation can send trace data to. Scribe is disabled by default.
+  # instrumentation can send trace data to.
   zipkin:
-    image: openzipkin/zipkin
+    image: openzipkin/zipkin-slim:${TAG:-latest}
     container_name: zipkin
     # Environment settings are defined here https://github.com/openzipkin/zipkin/blob/master/zipkin-server/README.md#environment-variables
     environment:
-      - STORAGE_TYPE=mysql
+      - STORAGE_TYPE=mem
       # Point the zipkin at the storage backend
       - MYSQL_HOST=mysql
-      # Uncomment to enable scribe
-      # - SCRIBE_ENABLED=true
       # Uncomment to enable self-tracing
       # - SELF_TRACING_ENABLED=true
-      # Uncomment to enable debug logging
-      # - JAVA_OPTS=-Dlogging.level.zipkin2=DEBUG
+      # Uncomment to increase heap size
+      # - JAVA_OPTS=-Xms128m -Xmx128m -XX:+ExitOnOutOfMemoryError
     ports:
       # Port used for the Zipkin UI and HTTP Api
       - 9411:9411
-      # Uncomment if you set SCRIBE_ENABLED=true
-      # - 9410:9410
-    depends_on:
-      - storage
+    # Uncomment to enable debug logging
+    # command: --logging.level.zipkin2=DEBUG
 
-  # Adds a cron to process spans since midnight every hour, and all spans each day
-  # This data is served by http://192.168.99.100:8080/dependency
-  #
-  # For more details, see https://github.com/openzipkin/docker-zipkin-dependencies
-  dependencies:
-    image: openzipkin/zipkin-dependencies
-    container_name: dependencies
-    entrypoint: crond -f
-    environment:
-      - STORAGE_TYPE=mysql
-      - MYSQL_HOST=mysql
-      # Add the baked-in username and password for the zipkin-mysql image
-      - MYSQL_USER=zipkin
-      - MYSQL_PASS=zipkin
-      # Uncomment to see dependency processing logs
-      # - ZIPKIN_LOG_LEVEL=DEBUG
-      # Uncomment to adjust memory used by the dependencies job
-      # - JAVA_OPTS=-verbose:gc -Xms1G -Xmx1G
-    depends_on:
-      - storage
-
-  prometheus:
-    image: prom/prometheus
-    container_name: prometheus
-    ports:
-      - 9090:9090
-    depends_on:
-      - storage
-    volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-
-  grafana:
-    image: grafana/grafana
-    container_name: grafana
-    ports:
-      - 3000:3000
-    depends_on:
-      - prometheus
-    environment:
-      - GF_AUTH_ANONYMOUS_ENABLED=true
-      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
-
-  setup_grafana_datasource:
-    image: appropriate/curl
-    container_name: setup_grafana_datasource
-    depends_on:
-      - grafana
-    volumes:
-      - ./prometheus/create-datasource-and-dashboard.sh:/create.sh:ro
-    command: /create.sh

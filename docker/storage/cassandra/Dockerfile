@@ -12,6 +12,8 @@
 # the License.
 #
 
+ARG java_version
+
 # We copy files from the context into a scratch container first to avoid a problem where docker and
 # docker-compose don't share layer hashes https://github.com/docker/compose/issues/883 normally.
 # COPY --from= works around the issue.
@@ -22,8 +24,8 @@ COPY zipkin-storage/cassandra-v1/src/main/resources/cassandra-schema.cql /zipkin
 COPY docker/storage/cassandra/install.sh /install/
 COPY docker/storage/cassandra/docker-bin/* /docker-bin/
 
-# Until Cassandra supports recent JDKs, we need to install with the JDK 1.8
-FROM openzipkin/jre-full:1.8.0_252-b09 as install
+# Until Cassandra supports recent JDKs, we can't re-use our builder
+FROM openzipkin/java:${java_version} as install
 
 # Use latest stable release here.
 ENV CASSANDRA_VERSION=3.11.8
@@ -34,8 +36,7 @@ COPY --from=scratch /zipkin-schemas/* ./zipkin-schemas/
 COPY --from=scratch /install/install.sh /tmp/
 RUN /tmp/install.sh && rm /tmp/install.sh
 
-# Share the same base image to reduce layers used in testing
-FROM openzipkin/jre-full:1.8.0_252-b09
+FROM openzipkin/java:${java_version}-jre as zipkin-cassandra
 
 # Add HEALTHCHECK and ENTRYPOINT scripts into the default search path
 COPY --from=scratch /docker-bin/* /usr/local/bin/

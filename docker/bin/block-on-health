@@ -1,0 +1,17 @@
+#!/bin/sh
+
+set -ue
+
+# Blocks until a named docker container with a valid HEALTHCHECK instruction is healthy or not:
+
+CONTAINER_NAME=$1
+CONTAINER_ID=$(docker ps  -q -f name=${CONTAINER_NAME})
+
+while status="$(docker inspect --format="{{if .Config.Healthcheck}}{{print .State.Health.Status}}{{end}}" "${CONTAINER_ID}")"; do
+  case $status in
+    starting) sleep 1;;
+    healthy) exit 0;;
+    unhealthy) exit 1;;
+  esac
+done
+exit 1

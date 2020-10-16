@@ -22,7 +22,7 @@ version: '2.4'
 
 services:
   kafka-zookeeper:
-    image: openzipkin/zipkin-kafka
+    image: openzipkin/zipkin-kafka:${TAG:-latest}
     container_name: kafka-zookeeper
     # If using docker machine, uncomment the below and set your bootstrap
     # server list to 192.168.99.100:19092
@@ -33,6 +33,11 @@ services:
       - 19092:19092
 
   zipkin:
+    extends:
+      file: docker-compose.yml
+      service: zipkin
+    # slim doesn't include Kafka support, so switch to the larger image
+    image: openzipkin/zipkin:${TAG:-latest}
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka-zookeeper:9092
     depends_on:

@@ -1,0 +1,14 @@
+# uses 2.4 so we can use condition: service_healthy
+version: "2.4"
+services:
+  # Use last build of Zipkin instead of adding a matrix build dependency
+  zipkin:
+    image: openzipkin/zipkin-slim:master
+    container_name: zipkin
+  # Use fixed service and container name 'sut; so our test script can copy/pasta
+  sut:
+    image: openzipkin/zipkin-ui:test
+    container_name: sut
+    depends_on:
+      zipkin:
+        condition: service_healthy

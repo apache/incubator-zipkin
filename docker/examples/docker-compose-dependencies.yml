@@ -12,22 +12,19 @@
 # the License.
 #
 
-# This file uses the version 2 docker-compose file format, described here:
-# https://docs.docker.com/compose/compose-file/#version-2
-#
-# It extends the default configuration from docker-compose.yml, hosting the
-# ui on port 80 using NGINX
-
 version: '2.4'
 
 services:
-  zipkin-ui:
-    image: openzipkin/zipkin-ui:${TAG:-latest}
-    container_name: zipkin-ui
-    environment:
-      # Change this if connecting to a different zipkin server
-      - ZIPKIN_BASE_URL=http://zipkin:9411
-    ports:
-      - 80:80
-    depends_on:
-      - zipkin
+  # Adds a cron to process spans since midnight every hour, and all spans each day
+  # This data is served by http://192.168.99.100:8080/dependency
+  #
+  # For more details, see https://github.com/openzipkin/docker-zipkin-dependencies
+  dependencies:
+    image: openzipkin/zipkin-dependencies
+    container_name: dependencies
+    entrypoint: crond -f
+    # environment:
+      # Uncomment to see dependency processing logs
+      # - ZIPKIN_LOG_LEVEL=DEBUG
+      # Uncomment to adjust memory used by the dependencies job
+      # - JAVA_OPTS=-verbose:gc -Xms1G -Xmx1G
