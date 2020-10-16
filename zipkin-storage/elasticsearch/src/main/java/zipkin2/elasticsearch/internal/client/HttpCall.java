@@ -107,7 +107,9 @@ public final class HttpCall<V> extends Call.Base<V> {
     }
 
     @Override public void writeBody(RequestStream requestStream) {
-      requestStream.tryWrite(request.content());
+      if (!request.content().isEmpty()) {
+        requestStream.tryWrite(request.content());
+      }
     }
   }
 
@@ -205,15 +207,10 @@ public final class HttpCall<V> extends Call.Base<V> {
     final HttpResponse response;
     try (SafeCloseable ignored =
            Clients.withContextCustomizer(ctx -> ctx.logBuilder().name(name))) {
-      final RequestHeaders headers = request.headers();
-      if (headers.isEndOfStream()) {
-        response = httpClient.execute(headers);
-      } else {
-        HttpRequestWriter httpRequest = HttpRequest.streaming(headers);
-        request.writeBody(httpRequest::tryWrite);
-        httpRequest.close();
-        response = httpClient.execute(httpRequest);
-      }
+      HttpRequestWriter httpRequest = HttpRequest.streaming(request.headers());
+      request.writeBody(httpRequest::tryWrite);
+      httpRequest.close();
+      response = httpClient.execute(httpRequest);
     }
     CompletableFuture<AggregatedHttpResponse> responseFuture =
       RequestContext.mapCurrent(

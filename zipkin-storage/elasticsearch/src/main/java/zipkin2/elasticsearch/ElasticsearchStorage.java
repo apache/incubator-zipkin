@@ -21,8 +21,6 @@ import com.linecorp.armeria.client.WebClient;
 import com.linecorp.armeria.client.endpoint.EndpointGroup;
 import com.linecorp.armeria.common.AggregatedHttpRequest;
 import com.linecorp.armeria.common.HttpMethod;
-import com.linecorp.armeria.common.RequestHeaders;
-
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -301,11 +299,7 @@ public abstract class ElasticsearchStorage extends zipkin2.storage.StorageCompon
     try {
       version(); // ensure the version is available (even if we already cached it)
       ensureIndexTemplates(); // called only once, so we have to double-check health
-      // Set endOfStream true so that the client always receives the response after the request is fully sent.
-      final RequestHeaders requestHeaders = RequestHeaders.builder(GET, "/_cluster/health/" + index)
-                                                          .endOfStream(true)
-                                                          .build();
-      AggregatedHttpRequest request = AggregatedHttpRequest.of(requestHeaders);
+      AggregatedHttpRequest request = AggregatedHttpRequest.of(GET, "/_cluster/health/" + index);
       CheckResult result = http().newCall(request, READ_STATUS, "get-cluster-health").execute();
       if (result == null) throw new IllegalArgumentException("No content reading cluster health");
       return result;

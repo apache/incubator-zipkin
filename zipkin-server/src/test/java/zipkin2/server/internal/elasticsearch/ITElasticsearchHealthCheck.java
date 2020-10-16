@@ -63,6 +63,7 @@ public class ITElasticsearchHealthCheck {
     }
   };
 
+  /** This ensures the response is sent after the request is fully read. */
   private static HttpResponse sendResponseAfterAggregate(HttpRequest req, AggregatedHttpResponse response) {
     final CompletableFuture<HttpResponse> future = new CompletableFuture<>();
     req.aggregate().whenComplete((aggregatedReq, cause) -> {
