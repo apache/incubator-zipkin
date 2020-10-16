@@ -651,14 +651,18 @@
                 <bnd>SCRIPT_STYLE</bnd>
                 <ejs>XML_STYLE</ejs>
                 <css>SLASHSTAR_STYLE</css>
-                <Dockerfile.release>SCRIPT_STYLE</Dockerfile.release>
-                <post_push>SCRIPT_STYLE</post_push>
                 <build>SCRIPT_STYLE</build>
-                <install>SCRIPT_STYLE</install>
+                <push>SCRIPT_STYLE</push>
                 <docker-healthcheck>SCRIPT_STYLE</docker-healthcheck>
+                <block-on-health>SCRIPT_STYLE</block-on-health>
+                <targets-to-build>SCRIPT_STYLE</targets-to-build>
+                <build_image>SCRIPT_STYLE</build_image>
                 <start-cassandra>SCRIPT_STYLE</start-cassandra>
+                <start-elasticsearch>SCRIPT_STYLE</start-elasticsearch>
                 <start-kafka-zookeeper>SCRIPT_STYLE</start-kafka-zookeeper>
                 <start-mysql>SCRIPT_STYLE</start-mysql>
+                <start-nginx>SCRIPT_STYLE</start-nginx>
+                <start-zipkin>SCRIPT_STYLE</start-zipkin>
               </mapping>
               <excludes>
                 <exclude>**/simplelogger.properties</exclude>
