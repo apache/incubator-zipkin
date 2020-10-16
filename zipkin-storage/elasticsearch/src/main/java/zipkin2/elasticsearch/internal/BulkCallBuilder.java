@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -20,10 +20,13 @@ import com.google.auto.value.AutoValue;
 import com.linecorp.armeria.common.HttpData;
 import com.linecorp.armeria.common.HttpHeaderNames;
 import com.linecorp.armeria.common.HttpMethod;
+import com.linecorp.armeria.common.HttpRequest;
+import com.linecorp.armeria.common.HttpRequestWriter;
 import com.linecorp.armeria.common.MediaType;
 import com.linecorp.armeria.common.RequestContext;
 import com.linecorp.armeria.common.RequestHeaders;
 import com.linecorp.armeria.common.util.Exceptions;
+import com.linecorp.armeria.internal.shaded.guava.collect.ImmutableList;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.ByteBufOutputStream;
@@ -138,7 +141,7 @@ public final class BulkCallBuilder {
 
     BulkRequestSupplier(List<IndexEntry<?>> entries, boolean shouldAddType,
       RequestHeaders headers, ByteBufAllocator alloc) {
-      this.entries = entries;
+      this.entries = ImmutableList.copyOf(entries);
       this.shouldAddType = shouldAddType;
       this.headers = headers;
       this.alloc = alloc;
@@ -148,13 +151,22 @@ public final class BulkCallBuilder {
       return headers;
     }
 
-    @Override public void writeBody(HttpCall.RequestStream requestStream) {
-      for (IndexEntry<?> entry : entries) {
-        if (!requestStream.tryWrite(HttpData.wrap(serialize(alloc, entry, shouldAddType)))) {
-          // Stream aborted, no need to serialize anymore.
-          return;
-        }
+    @Override
+    public HttpRequest get() {
+      final HttpRequestWriter writer = HttpRequest.streaming(headers);
+      writeEntry(writer, 0);
+      return writer;
+    }
+
+    private void writeEntry(HttpRequestWriter writer, int index) {
+      if (index == entries.size()) {
+        return;
       }
+      if (!writer.tryWrite(HttpData.wrap(serialize(alloc, entries.get(index), shouldAddType)))) {
+        // Stream aborted, no need to serialize anymore.
+        return;
+      }
+      writer.whenConsumed().thenRun(() -> writeEntry(writer, index + 1));
     }
   }
 

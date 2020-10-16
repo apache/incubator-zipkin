@@ -20,6 +20,7 @@ import com.linecorp.armeria.common.AggregatedHttpRequest;
 import com.linecorp.armeria.common.AggregatedHttpResponse;
 import com.linecorp.armeria.common.HttpData;
 import com.linecorp.armeria.common.HttpMethod;
+import com.linecorp.armeria.common.HttpRequest;
 import com.linecorp.armeria.common.HttpStatus;
 import com.linecorp.armeria.common.RequestHeaders;
 import com.linecorp.armeria.common.ResponseHeaders;
@@ -252,13 +253,15 @@ class HttpCallTest {
     server.enqueue(SUCCESS_RESPONSE);
 
     HttpCall.RequestSupplier supplier = new HttpCall.RequestSupplier() {
+
+      private final RequestHeaders headers = RequestHeaders.of(HttpMethod.POST, "/");
+
       @Override public RequestHeaders headers() {
-        return RequestHeaders.of(HttpMethod.POST, "/");
+        return headers;
       }
 
-      @Override public void writeBody(HttpCall.RequestStream requestStream) {
-        requestStream.tryWrite(HttpData.ofUtf8("hello"));
-        requestStream.tryWrite(HttpData.ofUtf8(" world"));
+      @Override public HttpRequest get() {
+        return HttpRequest.of(headers, HttpData.ofUtf8("hello"), HttpData.ofUtf8(" world"));
       }
     };
 
