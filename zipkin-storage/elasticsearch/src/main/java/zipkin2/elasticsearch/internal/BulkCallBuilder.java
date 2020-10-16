@@ -160,6 +160,7 @@ public final class BulkCallBuilder {
 
     private void writeEntry(HttpRequestWriter writer, int index) {
       if (index == entries.size()) {
+        writer.close();
         return;
       }
       if (!writer.tryWrite(HttpData.wrap(serialize(alloc, entries.get(index), shouldAddType)))) {
