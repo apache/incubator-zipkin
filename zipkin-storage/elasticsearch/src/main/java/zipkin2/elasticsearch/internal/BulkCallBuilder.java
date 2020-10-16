@@ -158,6 +158,7 @@ public final class BulkCallBuilder {
       return writer;
     }
 
+    // Use backpressure, so it's not buffering at all.
     private void writeEntry(HttpRequestWriter writer, int index) {
       if (index == entries.size()) {
         writer.close();
