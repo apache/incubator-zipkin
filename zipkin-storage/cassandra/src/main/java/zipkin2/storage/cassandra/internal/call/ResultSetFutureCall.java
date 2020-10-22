@@ -13,104 +13,118 @@
  */
 package zipkin2.storage.cassandra.internal.call;
 
-import com.datastax.driver.core.ResultSet;
-import com.datastax.driver.core.ResultSetFuture;
-import com.datastax.driver.core.exceptions.BusyConnectionException;
-import com.datastax.driver.core.exceptions.BusyPoolException;
-import com.datastax.driver.core.exceptions.DriverException;
-import com.datastax.driver.core.exceptions.DriverInternalError;
-import com.datastax.driver.core.exceptions.QueryConsistencyException;
-import com.google.common.util.concurrent.ListenableFuture;
+import com.datastax.oss.driver.api.core.DriverException;
+import com.datastax.oss.driver.api.core.DriverExecutionException;
+import com.datastax.oss.driver.api.core.RequestThrottlingException;
+import com.datastax.oss.driver.api.core.connection.BusyConnectionException;
+import com.datastax.oss.driver.api.core.cql.AsyncResultSet;
+import com.datastax.oss.driver.api.core.servererrors.QueryConsistencyException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 import zipkin2.Call;
+import zipkin2.Call.Mapper;
 import zipkin2.Callback;
+import zipkin2.internal.Nullable;
 
-/**
- * Future call pattern that takes advantage of special 'get' hooks on {@link
- * com.datastax.driver.core.ResultSetFuture}.
- */
 // some copy/pasting is ok here as debugging is obscured when the type hierarchy gets deep.
 public abstract class ResultSetFutureCall<V> extends Call.Base<V>
-  implements Call.Mapper<ResultSet, V> {
+  implements Mapper<AsyncResultSet, V>, Function<AsyncResultSet, V> {
   /** Defers I/O until {@link #enqueue(Callback)} or {@link #execute()} are called. */
-  protected abstract ListenableFuture<ResultSet> newFuture();
+  protected abstract CompletionStage<AsyncResultSet> newCompletionStage();
 
-  volatile ListenableFuture<ResultSet> future;
+  volatile CompletableFuture<V> future;
 
-  @Override
-  protected V doExecute() {
-    return map(getUninterruptibly(future = newFuture()));
+  @Override protected V doExecute() {
+    return getUninterruptibly(newCompletionStage().thenApply(this));
   }
 
-  @Override
-  protected void doEnqueue(Callback<V> callback) {
-    // Similar to Futures.addCallback except doesn't double-wrap
-    class CallbackListener implements Runnable {
-      @Override
-      public void run() {
-        try {
-          callback.onSuccess(map(getUninterruptibly(future)));
-        } catch (Throwable t) {
-          propagateIfFatal(t);
-          callback.onError(t);
-        }
-      }
-    }
+  @Override protected void doEnqueue(Callback<V> callback) {
     try {
-      (future = newFuture()).addListener(new CallbackListener(), DirectExecutor.INSTANCE);
+      future = newCompletionStage()
+        .thenApply(this)
+        .handleAsync(new CallbackFunction<>(callback))
+        .toCompletableFuture();
     } catch (Throwable t) {
       propagateIfFatal(t);
       callback.onError(t);
-      throw t;
     }
   }
 
-  @Override
-  protected void doCancel() {
-    ListenableFuture<ResultSet> maybeFuture = future;
+  @Override public V apply(AsyncResultSet input) {
+    return map(input); // dispatched to Function so that toString is nicer vs a lambda
+  }
+
+  @Override protected void doCancel() {
+    CompletableFuture<V> maybeFuture = future;
     if (maybeFuture != null) maybeFuture.cancel(true);
   }
 
-  @Override
-  protected final boolean doIsCanceled() {
-    ListenableFuture<ResultSet> maybeFuture = future;
+  @Override protected final boolean doIsCanceled() {
+    CompletableFuture<V> maybeFuture = future;
     return maybeFuture != null && maybeFuture.isCancelled();
   }
 
-  /** Sets {@link zipkin2.storage.StorageComponent#isOverCapacity(java.lang.Throwable)} */
-  public static boolean isOverCapacity(Throwable e) {
-    return e instanceof QueryConsistencyException ||
-      e instanceof BusyConnectionException ||
-      e instanceof BusyPoolException;
-  }
+  static final class CallbackFunction<V> implements BiFunction<V, Throwable, V> {
+    final Callback<V> callback;
 
-  static ResultSet getUninterruptibly(ListenableFuture<ResultSet> future) {
-    if (future instanceof ResultSetFuture) {
-      return ((ResultSetFuture) future).getUninterruptibly();
+    CallbackFunction(Callback<V> callback) {
+      this.callback = callback;
     }
 
-    // Like Guava's Uninterruptables.getUninterruptibly, except we process exceptions
+    @Override public V apply(V input, @Nullable Throwable error) {
+      if (error != null) {
+        callback.onError(error);
+        return input;
+      }
+      try {
+        callback.onSuccess(input);
+      } catch (Throwable t) {
+        propagateIfFatal(t);
+        callback.onError(t);
+      }
+      return input;
+    }
+
+    @Override public String toString() {
+      return callback.toString();
+    }
+  }
+
+  // Avoid internal dependency on Datastax CompletableFutures and shaded Throwables
+  static <T> T getUninterruptibly(CompletionStage<T> stage) {
     boolean interrupted = false;
     try {
-      // loop on interrupted until get() returns or throws something else
       while (true) {
         try {
-          return future.get();
+          return stage.toCompletableFuture().get();
         } catch (InterruptedException e) {
           interrupted = true;
+        } catch (ExecutionException e) {
+          Throwable cause = e.getCause();
+          if (cause instanceof DriverException) {
+            throw ((DriverException) cause).copy();
+          }
+          if (cause instanceof RuntimeException) throw (RuntimeException) cause;
+          if (cause instanceof Error) throw (Error) cause;
+          throw new DriverExecutionException(cause);
         }
       }
-    } catch (ExecutionException e) {
-      // emulate ResultSetFuture.getUninterruptibly unwrapping of driver exceptions
-      Throwable cause = e.getCause();
-      if (cause instanceof Error) throw ((Error) cause);
-      if (cause instanceof DriverException) throw ((DriverException) cause).copy();
-      throw new DriverInternalError("Unexpected exception thrown", cause);
     } finally {
-      // Reset once, instead of doing so each get() was interrupted.
       if (interrupted) {
         Thread.currentThread().interrupt();
       }
     }
+  }
+
+  /**
+   * Sets {@link zipkin2.storage.StorageComponent#isOverCapacity(java.lang.Throwable)}
+   */
+  public static boolean isOverCapacity(Throwable e) {
+    return e instanceof QueryConsistencyException ||
+      e instanceof BusyConnectionException ||
+      e instanceof RequestThrottlingException;
   }
 }

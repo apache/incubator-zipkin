@@ -13,15 +13,16 @@
  */
 package zipkin2.storage;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
+import zipkin2.Span;
 
 import static java.util.Arrays.asList;
-import static org.assertj.core.api.Assertions.assertThat;
-import static zipkin2.TestObjects.CLIENT_SPAN;
-import static zipkin2.TestObjects.LOTS_OF_SPANS;
+import static zipkin2.TestObjects.newClientSpan;
+import static zipkin2.TestObjects.newTraceId;
+import static zipkin2.TestObjects.spanBuilder;
 
 /**
  * Base test for {@link Traces}.
@@ -34,50 +35,49 @@ public abstract class ITTraces<T extends StorageComponent> extends ITStorage<T> 
     // Defaults are fine.
   }
 
-  @Test protected void getTrace_returnsEmptyOnNotFound() throws IOException {
-    assertThat(traces().getTrace(CLIENT_SPAN.traceId()).execute())
-      .isEmpty();
+  @Test protected void getTrace_returnsEmptyOnNotFound(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span clientSpan = newClientSpan(testSuffix);
 
-    accept(CLIENT_SPAN);
+    assertGetTraceReturnsEmpty(clientSpan.traceId());
 
-    assertThat(traces().getTrace(CLIENT_SPAN.traceId()).execute())
-      .containsExactly(CLIENT_SPAN);
+    accept(clientSpan);
 
-    assertThat(traces().getTrace(CLIENT_SPAN.traceId().substring(16)).execute())
-      .isEmpty();
+    assertGetTraceReturns(clientSpan);
+
+    assertGetTraceReturnsEmpty(clientSpan.traceId().substring(16));
   }
 
+  @Test protected void getTraces_onlyReturnsTracesThatMatch(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span span1 = spanBuilder(testSuffix).build(), span2 = spanBuilder(testSuffix).build();
+    List<String> traceIds = asList(span1.traceId(), newTraceId());
 
-  @Test protected void getTraces_onlyReturnsTracesThatMatch() throws IOException {
-    List<String> traceIds = asList(LOTS_OF_SPANS[0].traceId(), LOTS_OF_SPANS[1].traceId());
+    assertGetTracesReturnsEmpty(traceIds);
 
-    assertThat(traces().getTraces(traceIds).execute())
-      .isEmpty();
+    accept(span1, span2);
 
-    accept(LOTS_OF_SPANS[0], LOTS_OF_SPANS[2]);
+    assertGetTracesReturns(traceIds, asList(span1));
 
-    assertThat(traces().getTraces(traceIds).execute())
-      .containsOnly(asList(LOTS_OF_SPANS[0]));
-
-    List<String> longTraceIds = traceIds.stream().map(t -> "a" + t).collect(Collectors.toList());
-    assertThat(traces().getTraces(longTraceIds).execute())
-      .isEmpty();
+    List<String> shortTraceIds =
+      traceIds.stream().map(t -> t.substring(16)).collect(Collectors.toList());
+    assertGetTracesReturnsEmpty(shortTraceIds);
   }
 
-  @Test protected void getTraces_returnsEmptyOnNotFound() throws IOException {
-    List<String> traceIds = asList(LOTS_OF_SPANS[0].traceId(), LOTS_OF_SPANS[1].traceId());
+  @Test protected void getTraces_returnsEmptyOnNotFound(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span span1 = spanBuilder(testSuffix).build(), span2 = spanBuilder(testSuffix).build();
+    List<String> traceIds = asList(span1.traceId(), span2.traceId());
 
-    assertThat(traces().getTraces(traceIds).execute())
-      .isEmpty();
+    assertGetTracesReturnsEmpty(traceIds);
 
-    accept(LOTS_OF_SPANS[0], LOTS_OF_SPANS[1]);
+    accept(span1, span2);
 
-    assertThat(traces().getTraces(traceIds).execute())
-      .containsExactlyInAnyOrder(asList(LOTS_OF_SPANS[0]), asList(LOTS_OF_SPANS[1]));
+    assertGetTracesReturns(traceIds, asList(span1), asList(span2));
 
-    List<String> longTraceIds = traceIds.stream().map(t -> "a" + t).collect(Collectors.toList());
-    assertThat(traces().getTraces(longTraceIds).execute())
-      .isEmpty();
+    List<String> shortTraceIds =
+      traceIds.stream().map(t -> t.substring(16)).collect(Collectors.toList());
+    assertGetTracesReturnsEmpty(shortTraceIds);
   }
 
   /**
@@ -86,12 +86,14 @@ public abstract class ITTraces<T extends StorageComponent> extends ITStorage<T> 
    * exists, it is known not all backends will be able to cheaply make it pass. In other words, it
    * is optional.
    */
-  @Test protected void getTrace_deduplicates() throws IOException {
-    // simulate a re-processed message
-    accept(LOTS_OF_SPANS[0]);
-    accept(LOTS_OF_SPANS[0]);
+  @Test protected void getTrace_deduplicates(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span span = spanBuilder(testSuffix).build();
 
-    assertThat(sortTrace(traces().getTrace(LOTS_OF_SPANS[0].traceId()).execute()))
-      .containsExactly(LOTS_OF_SPANS[0]);
+    // simulate a re-processed message
+    accept(span);
+    accept(span);
+
+    assertGetTraceReturns(span);
   }
 }

@@ -227,7 +227,7 @@ supports version 3.11+ and applies when `STORAGE_TYPE` is set to `cassandra3`:
 
     * `CASSANDRA_KEYSPACE`: The keyspace to use. Defaults to "zipkin2"
     * `CASSANDRA_CONTACT_POINTS`: Comma separated list of host addresses part of Cassandra cluster. You can also specify a custom port with 'host:port'. Defaults to localhost on port 9042.
-    * `CASSANDRA_LOCAL_DC`: Name of the datacenter that will be considered "local" for latency load balancing. When unset, load-balancing is round-robin.
+    * `CASSANDRA_LOCAL_DC`: Name of the datacenter that will be considered "local" for load balancing. Defaults to "datacenter1"
     * `CASSANDRA_ENSURE_SCHEMA`: Ensuring cassandra has the latest schema. If enabled tries to execute scripts in the classpath prefixed with `cassandra-schema-cql3`. Defaults to true
     * `CASSANDRA_USERNAME` and `CASSANDRA_PASSWORD`: Cassandra authentication. Will throw an exception on startup if authentication fails. No default
     * `CASSANDRA_USE_SSL`: Requires `javax.net.ssl.trustStore` and `javax.net.ssl.trustStorePassword`, defaults to false.
@@ -239,12 +239,10 @@ The following are tuning parameters which may not concern all users:
     * `CASSANDRA_INDEX_CACHE_TTL`: How many seconds to cache index metadata about a trace. Defaults to 60.
     * `CASSANDRA_INDEX_FETCH_MULTIPLIER`: How many more index rows to fetch than the user-supplied query limit. Defaults to 3.
 
-Example usage with Cassandra connection and query logging:
-
+Example usage with Cassandra with request logging (TRACE shows query values):
 ```bash
 $ STORAGE_TYPE=cassandra3 java -jar zipkin.jar \
- --logging.level.com.datastax.driver.core.Connection=debug \
- --logging.level.com.datastax.driver.core.QueryLogger.NORMAL=trace
+--logging.level.com.datastax.oss.driver.internal.core.tracker.RequestLogger=DEBUG
 ```
 
 ### Elasticsearch Storage

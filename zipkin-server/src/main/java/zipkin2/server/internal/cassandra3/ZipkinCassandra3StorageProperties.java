@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -23,7 +23,7 @@ class ZipkinCassandra3StorageProperties implements Serializable { // for Spark j
 
   private String keyspace = "zipkin3";
   private String contactPoints = "localhost";
-  private String localDc;
+  private String localDc = "datacenter1";
   private int maxConnections = 8;
   private boolean ensureSchema = true;
   private boolean useSsl = false;
@@ -106,14 +106,14 @@ class ZipkinCassandra3StorageProperties implements Serializable { // for Spark j
 
   public CassandraStorage.Builder toBuilder() {
     return CassandraStorage.newBuilder()
-        .keyspace(keyspace)
-        .contactPoints(contactPoints)
-        .localDc(localDc)
-        .maxConnections(maxConnections)
-        .ensureSchema(ensureSchema)
-        .useSsl(useSsl)
-        .username(username)
-        .password(password)
-        .indexFetchMultiplier(indexFetchMultiplier);
+      .keyspace(keyspace)
+      .contactPoints(contactPoints)
+      .localDc(localDc)
+      .maxConnections(maxConnections)
+      .ensureSchema(ensureSchema)
+      .useSsl(useSsl)
+      .username(username)
+      .password(password)
+      .indexFetchMultiplier(indexFetchMultiplier);
   }
 }

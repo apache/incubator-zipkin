@@ -20,6 +20,10 @@
 # substitutions like: ${DOCKER_TAG//,/ }
 set -eux
 
+# This hook is called with the current directory set to the same as the Dockerfile, so we go back
+# to top level.
+cd ..
+
 if [ "${DOCKER_REPO}" = "index.docker.io/openzipkin/zipkin" ]; then
   for tag in ${DOCKER_TAG//,/ }; do
     for target in $(docker/bin/targets-to-build); do
@@ -33,7 +37,7 @@ if [ "${DOCKER_REPO}" = "index.docker.io/openzipkin/zipkin" ]; then
     # We re-push the builder image on master, not on release branches.
     echo Building zipkin-builder
 
-    docker build -f "${DOCKERFILE_PATH}" -t openzipkin/zipkin-builder --target zipkin-builder .
+    docker/build_image zipkin-builder latest
 
     echo Pushing zipkin-builder
     # zipkin-builder is just a cache of maven / npm dependencies, there's no need to version it

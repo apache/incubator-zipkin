@@ -10,7 +10,7 @@ accumulated too much cruft, it can be refreshed with the following:
 ```bash
 # Build the builder and publish it
 $ docker login
-$ docker build -t openzipkin/zipkin-builder -f docker/builder/Dockerfile .
+$ docker/build_image zipkin-builder latest
 $ docker push openzipkin/zipkin-builder
 ```
 

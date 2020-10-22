@@ -13,6 +13,7 @@
  */
 package zipkin2.server.internal;
 
+import com.linecorp.armeria.common.HttpStatus;
 import com.linecorp.armeria.server.Server;
 import java.io.IOException;
 import java.io.InputStream;
@@ -247,7 +248,7 @@ public class ITZipkinServer {
     assertThat(info.body().string())
       .isEqualToIgnoringWhitespace(stringFromClasspath(getClass(), "info.json"));
   }
-  
+
   @Test public void getTrace_spaceAfterTraceId() throws Exception {
     storage.accept(TRACE).execute();
 
@@ -258,7 +259,23 @@ public class ITZipkinServer {
       .containsExactly(SpanBytesEncoder.JSON_V2.encodeList(TRACE));
   }
 
-  
+  @Test public void traceMethodDisallowed() {
+    // trace method is disallowed for any route but we just test couple of paths here, can't test them all
+    Arrays.stream(new String[]{"/", "/api/v2/traces", "/whatever/and/not"}).forEach(path -> {
+      final Response response;
+      try {
+        response = client.newCall(new Request.Builder().url(url(server, path))
+          .method("TRACE", null).build())
+          .execute();
+        assertThat(response.isSuccessful()).isFalse();
+        assertThat(response.code()).isEqualTo(HttpStatus.METHOD_NOT_ALLOWED.code());
+      } catch (IOException e) {
+        throw new RuntimeException(e.getMessage(), e);
+      }
+    });
+  }
+
+
   private Response get(String path) throws IOException {
     return client.newCall(new Request.Builder()
       .url(url(server, path))

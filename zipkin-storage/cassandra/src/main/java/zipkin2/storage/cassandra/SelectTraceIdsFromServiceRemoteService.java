@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,18 +13,16 @@
  */
 package zipkin2.storage.cassandra;
 
-import com.datastax.driver.core.PreparedStatement;
-import com.datastax.driver.core.ResultSet;
-import com.datastax.driver.core.ResultSetFuture;
-import com.datastax.driver.core.Session;
-import com.datastax.driver.core.Statement;
-import com.datastax.driver.core.querybuilder.QueryBuilder;
+import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.cql.AsyncResultSet;
+import com.datastax.oss.driver.api.core.cql.PreparedStatement;
 import com.google.auto.value.AutoValue;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletionStage;
 import zipkin2.Call;
 import zipkin2.storage.cassandra.CassandraSpanStore.TimestampRange;
 import zipkin2.storage.cassandra.internal.call.AccumulateTraceIdTsUuid;
@@ -33,7 +31,7 @@ import zipkin2.storage.cassandra.internal.call.ResultSetFutureCall;
 
 import static zipkin2.storage.cassandra.Schema.TABLE_TRACE_BY_SERVICE_REMOTE_SERVICE;
 
-final class SelectTraceIdsFromServiceRemoteService extends ResultSetFutureCall<ResultSet> {
+final class SelectTraceIdsFromServiceRemoteService extends ResultSetFutureCall<AsyncResultSet> {
   @AutoValue abstract static class Input {
     abstract String service();
 
@@ -58,20 +56,19 @@ final class SelectTraceIdsFromServiceRemoteService extends ResultSetFutureCall<R
     }
   }
 
-  static class Factory {
-    final Session session;
+  static final class Factory {
+    final CqlSession session;
     final PreparedStatement preparedStatement;
 
-    Factory(Session session) {
+    Factory(CqlSession session) {
       this.session = session;
-      this.preparedStatement = session.prepare(QueryBuilder.select("ts", "trace_id")
-        .from(TABLE_TRACE_BY_SERVICE_REMOTE_SERVICE)
-        .where(QueryBuilder.eq("service", QueryBuilder.bindMarker("service")))
-        .and(QueryBuilder.eq("remote_service", QueryBuilder.bindMarker("remote_service")))
-        .and(QueryBuilder.eq("bucket", QueryBuilder.bindMarker("bucket")))
-        .and(QueryBuilder.gte("ts", QueryBuilder.bindMarker("start_ts")))
-        .and(QueryBuilder.lte("ts", QueryBuilder.bindMarker("end_ts")))
-        .limit(QueryBuilder.bindMarker("limit_")));
+      this.preparedStatement = session.prepare("SELECT trace_id,ts"
+        + " FROM " + TABLE_TRACE_BY_SERVICE_REMOTE_SERVICE
+        + " WHERE service=? AND remote_service=?"
+        + " AND bucket=?"
+        + " AND ts>=?"
+        + " AND ts<=?"
+        + " LIMIT ?");
     }
 
     Input newInput(
@@ -102,7 +99,7 @@ final class SelectTraceIdsFromServiceRemoteService extends ResultSetFutureCall<R
 
     Call<Map<String, Long>> newCall(Input input) {
       return new SelectTraceIdsFromServiceRemoteService(this, preparedStatement, input)
-        .flatMap(new AccumulateTraceIdTsUuid());
+        .flatMap(AccumulateTraceIdTsUuid.get());
     }
 
     /** Applies all deferred service names to all input templates */
@@ -154,19 +151,18 @@ final class SelectTraceIdsFromServiceRemoteService extends ResultSetFutureCall<R
     this.input = input;
   }
 
-  @Override protected ResultSetFuture newFuture() {
-    Statement bound = preparedStatement.bind()
-      .setString("service", input.service())
-      .setString("remote_service", input.remote_service())
-      .setInt("bucket", input.bucket())
-      .setUUID("start_ts", input.start_ts())
-      .setUUID("end_ts", input.end_ts())
-      .setInt("limit_", input.limit_())
-      .setFetchSize(input.limit_());
-    return factory.session.executeAsync(bound);
+  @Override protected CompletionStage<AsyncResultSet> newCompletionStage() {
+    return factory.session.executeAsync(preparedStatement.boundStatementBuilder()
+      .setString(0, input.service())
+      .setString(1, input.remote_service())
+      .setInt(2, input.bucket())
+      .setUuid(3, input.start_ts())
+      .setUuid(4, input.end_ts())
+      .setInt(5, input.limit_())
+      .setPageSize(input.limit_()).build());
   }
 
-  @Override public ResultSet map(ResultSet input) {
+  @Override public AsyncResultSet map(AsyncResultSet input) {
     return input;
   }
 

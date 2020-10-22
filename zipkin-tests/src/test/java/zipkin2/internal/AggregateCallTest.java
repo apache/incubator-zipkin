@@ -62,7 +62,7 @@ public class AggregateCallTest {
   @Test public void newVoidCall_joinsMultipleCalls() {
     assertThat(AggregateCall.newVoidCall(asList(call1, call2)))
       .isInstanceOf(AggregateCall.AggregateVoidCall.class)
-      .extracting("calls")
+      .extracting("delegate")
       .isEqualTo(asList(call1, call2));
   }
 
@@ -268,7 +268,7 @@ public class AggregateCallTest {
 
   static final class AggregateDependencyLinks
     extends AggregateCall<List<DependencyLink>, List<DependencyLink>> {
-    AggregateDependencyLinks(List<? extends Call<List<DependencyLink>>> calls) {
+    AggregateDependencyLinks(List<Call<List<DependencyLink>>> calls) {
       super(calls);
     }
 

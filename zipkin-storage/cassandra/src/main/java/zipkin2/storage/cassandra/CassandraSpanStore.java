@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,10 +13,10 @@
  */
 package zipkin2.storage.cassandra;
 
-import com.datastax.driver.core.KeyspaceMetadata;
-import com.datastax.driver.core.Session;
-import com.datastax.driver.core.exceptions.DriverException;
-import com.datastax.driver.core.utils.UUIDs;
+import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.DriverException;
+import com.datastax.oss.driver.api.core.metadata.schema.KeyspaceMetadata;
+import com.datastax.oss.driver.api.core.uuid.Uuids;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -32,10 +32,12 @@ import zipkin2.storage.QueryRequest;
 import zipkin2.storage.ServiceAndSpanNames;
 import zipkin2.storage.SpanStore;
 import zipkin2.storage.Traces;
+import zipkin2.storage.cassandra.internal.KeyspaceMetadataUtil;
 import zipkin2.storage.cassandra.internal.call.IntersectKeySets;
 import zipkin2.storage.cassandra.internal.call.IntersectMaps;
 
 import static java.util.Arrays.asList;
+import static zipkin2.storage.cassandra.CassandraUtil.durationIndexBucket;
 import static zipkin2.storage.cassandra.CassandraUtil.traceIdsSortedByDescTimestamp;
 import static zipkin2.storage.cassandra.Schema.TABLE_SERVICE_REMOTE_SERVICES;
 import static zipkin2.storage.cassandra.Schema.TABLE_TRACE_BY_SERVICE_SPAN;
@@ -58,12 +60,12 @@ class CassandraSpanStore implements SpanStore, Traces, ServiceAndSpanNames { //n
   @Nullable final SelectTraceIdsFromServiceRemoteService.Factory traceIdsFromServiceRemoteService;
 
   CassandraSpanStore(CassandraStorage storage) {
-    Session session = storage.session();
+    CqlSession session = storage.session();
     Schema.Metadata metadata = storage.metadata();
-    int maxTraceCols = storage.maxTraceCols();
-    indexFetchMultiplier = storage.indexFetchMultiplier();
-    boolean strictTraceId = storage.strictTraceId();
-    searchEnabled = storage.searchEnabled();
+    int maxTraceCols = storage.maxTraceCols;
+    indexFetchMultiplier = storage.indexFetchMultiplier;
+    boolean strictTraceId = storage.strictTraceId;
+    searchEnabled = storage.searchEnabled;
 
     spans = new SelectFromSpan.Factory(session, strictTraceId, maxTraceCols);
     dependencies = new SelectDependencies.Factory(session);
@@ -79,8 +81,8 @@ class CassandraSpanStore implements SpanStore, Traces, ServiceAndSpanNames { //n
       return;
     }
 
-    KeyspaceMetadata md = Schema.ensureKeyspaceMetadata(session, storage.keyspace());
-    indexTtl = md.getTable(TABLE_TRACE_BY_SERVICE_SPAN).getOptions().getDefaultTimeToLive();
+    KeyspaceMetadata md = Schema.ensureKeyspaceMetadata(session, storage.keyspace);
+    indexTtl = KeyspaceMetadataUtil.getDefaultTtl(md, TABLE_TRACE_BY_SERVICE_SPAN);
     serviceNames = new SelectServiceNames.Factory(session).create();
     if (metadata.hasRemoteService) {
       remoteServiceNames = new SelectRemoteServiceNames.Factory(session);
@@ -100,7 +102,7 @@ class CassandraSpanStore implements SpanStore, Traces, ServiceAndSpanNames { //n
    *
    * <p>If dropped, trying to search by annotation in the UI will throw an IllegalStateException.
    */
-  static SelectTraceIdsFromSpan.Factory initialiseSelectTraceIdsFromSpan(Session session) {
+  static SelectTraceIdsFromSpan.Factory initialiseSelectTraceIdsFromSpan(CqlSession session) {
     try {
       return new SelectTraceIdsFromSpan.Factory(session);
     } catch (DriverException ex) {
@@ -120,8 +122,7 @@ class CassandraSpanStore implements SpanStore, Traces, ServiceAndSpanNames { //n
    * rows match). Once IDs are parsed, there's one call for each 5K rows of span data. This means
    * "http.path=/foo and error" is minimally 3 network calls, the first two in parallel.
    */
-  @Override
-  public Call<List<List<Span>>> getTraces(QueryRequest request) {
+  @Override public Call<List<List<Span>>> getTraces(QueryRequest request) {
     if (!searchEnabled) return Call.emptyList();
 
     TimestampRange timestampRange = timestampRange(request);
@@ -150,8 +151,7 @@ class CassandraSpanStore implements SpanStore, Traces, ServiceAndSpanNames { //n
     }
 
     if (callsToIntersect.size() == 1) {
-      return callsToIntersect
-        .get(0)
+      return callsToIntersect.get(0)
         .map(traceIdsSortedByDescTimestamp())
         .flatMap(spans.newFlatMapper(request));
     }
@@ -181,8 +181,8 @@ class CassandraSpanStore implements SpanStore, Traces, ServiceAndSpanNames { //n
     // trace_by_service_span adds special empty-string span name in order to search by all
     String spanName = null != request.spanName() ? request.spanName() : "";
     Long minDuration = request.minDuration(), maxDuration = request.maxDuration();
-    int startBucket = CassandraUtil.durationIndexBucket(timestampRange.startMillis * 1000);
-    int endBucket = CassandraUtil.durationIndexBucket(timestampRange.endMillis * 1000);
+    int startBucket = durationIndexBucket(timestampRange.startMillis * 1000);
+    int endBucket = durationIndexBucket(timestampRange.endMillis * 1000);
     if (startBucket > endBucket) {
       throw new IllegalArgumentException(
         "Start bucket (" + startBucket + ") > end bucket (" + endBucket + ")");
@@ -309,9 +309,9 @@ class CassandraSpanStore implements SpanStore, Traces, ServiceAndSpanNames { //n
     long oldestData = Math.max(System.currentTimeMillis() - indexTtl * 1000, 0); // >= 1970
     TimestampRange result = new TimestampRange();
     result.startMillis = Math.max((request.endTs() - request.lookback()), oldestData);
-    result.startUUID = UUIDs.startOf(result.startMillis);
+    result.startUUID = Uuids.startOf(result.startMillis);
     result.endMillis = Math.max(request.endTs(), oldestData);
-    result.endUUID = UUIDs.endOf(result.endMillis);
+    result.endUUID = Uuids.endOf(result.endMillis);
     return result;
   }
 }

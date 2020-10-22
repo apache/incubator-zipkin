@@ -5,7 +5,7 @@ This uses Cassandra 3.11.3+ features, but is tested against the latest patch of 
 
 `CassandraSpanStore.getDependencies()` returns pre-aggregated dependency links (ex via [zipkin-dependencies](https://github.com/openzipkin/zipkin-dependencies)).
 
-The implementation uses the [Datastax Java Driver 3.x](https://github.com/datastax/java-driver).
+The implementation uses the [Datastax Java Driver 4.x](https://github.com/datastax/java-driver).
 
 `zipkin2.storage.cassandra.CassandraStorage.Builder` includes defaults that will operate against a local Cassandra installation.
 
@@ -16,14 +16,12 @@ zipkin-server).
 
 Zipkin's storage layer logs to the category "zipkin2.storage.cassandra",
 but you may wish to see the entire "zipkin2" when troubleshooting.
-Depending on details desired, the underlying driver's category
-"com.datastax.driver.core" at debug level may help.
 
-If you just want to see queries and latency, set the category
-"com.datastax.driver.core.QueryLogger.NORMAL" to debug or trace. Trace level
-includes bound values.
+If you want to see requests and latency, set the logging category
+"com.datastax.oss.driver.internal.core.tracker.RequestLogger" to DEBUG.
+TRACE includes query values.
 
-See [Logging Query Latencies](http://docs.datastax.com/en/developer/java-driver/3.0/supplemental/manual/logging/#logging-query-latencies) for more details.
+See [Request Logger](https://docs.datastax.com/en/developer/java-driver/4.9/manual/core/request_tracker/#request-logger) for more details.
 
 ## Testing
 This module conditionally runs integration tests against a local Cassandra instance.
@@ -166,7 +164,7 @@ and reduces size on disk by not amplifying writes with index data.
 [Disabling search](../../README.md#disabling-search) disables indexing.
 
 ### Time-To_live
-Time-To-Live is default now at the table level. It can not be overridden in write requests.
+Time-To-Live is default now at the table level. It cannot be overridden in write requests.
 
 There's a different default TTL for trace data and indexes, 7 days vs 3 days respectively. The impact is that you can
 retrieve a trace by ID for up to 7 days, but you can only search the last 3 days of traces (ex by service name).

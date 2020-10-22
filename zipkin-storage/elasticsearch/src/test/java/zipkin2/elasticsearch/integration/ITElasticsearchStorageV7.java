@@ -37,9 +37,5 @@ class ITElasticsearchStorageV7 extends ITElasticsearchStorage {
     @Override protected ElasticsearchStorage.Builder newStorageBuilder(TestInfo testInfo) {
       return backend().computeStorageBuilder().index(index(testInfo));
     }
-
-    @Override public void clear() throws IOException {
-      storage.clear();
-    }
   }
 }

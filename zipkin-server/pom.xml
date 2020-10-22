@@ -145,38 +145,6 @@
       <artifactId>zipkin-storage-cassandra-v1</artifactId>
       <version>${project.version}</version>
       <optional>true</optional>
-      <exclusions>
-        <exclusion>
-          <groupId>com.datastax.cassandra</groupId>
-          <artifactId>cassandra-driver-core</artifactId>
-        </exclusion>
-      </exclusions>
-    </dependency>
-    <!-- shaded to not interfere with netty 4.1 and boringssl. [JAVA-1241] -->
-    <dependency>
-      <groupId>com.datastax.cassandra</groupId>
-      <artifactId>cassandra-driver-core</artifactId>
-      <version>${cassandra-driver-core.version}</version>
-      <classifier>shaded</classifier>
-      <optional>true</optional>
-      <exclusions>
-        <exclusion>
-          <groupId>io.netty</groupId>
-          <artifactId>*</artifactId>
-        </exclusion>
-      </exclusions>
-    </dependency>
-    <dependency>
-      <groupId>com.datastax.cassandra</groupId>
-      <artifactId>cassandra-driver-mapping</artifactId>
-      <version>${cassandra-driver-core.version}</version>
-      <optional>true</optional>
-      <exclusions>
-        <exclusion>
-          <groupId>com.datastax.cassandra</groupId>
-          <artifactId>cassandra-driver-core</artifactId>
-        </exclusion>
-      </exclusions>
     </dependency>
 
     <!-- Elasticsearch http -->
@@ -248,12 +216,12 @@
       <artifactId>brave-context-slf4j</artifactId>
       <optional>true</optional>
     </dependency>
-    <dependency>
-      <groupId>io.zipkin.brave.cassandra</groupId>
-      <artifactId>brave-instrumentation-cassandra-driver</artifactId>
-      <version>0.10.3</version>
-      <optional>true</optional>
-    </dependency>
+<!--    <dependency>-->
+<!--      <groupId>io.zipkin.brave.cassandra</groupId>-->
+<!--      <artifactId>brave-instrumentation-cassandra-driver</artifactId>-->
+<!--      <version>0.10.3</version>-->
+<!--      <optional>true</optional>-->
+<!--    </dependency>-->
 
     <!-- Test dependencies -->
     <!-- to test the experimental grpc endpoint with the square/wire library -->
@@ -506,7 +474,7 @@
               <classifier>slim</classifier>
               <!-- https://github.com/spring-projects/spring-boot/issues/3426 transitive exclude doesn't work -->
               <excludeGroupIds>
-                com.google.auto.value,com.google.guava,io.dropwizard.metrics,com.datastax.cassandra,com.github.jnr,org.ow2.asm,org.jooq,javax.xml.bind,org.mariadb.jdbc,com.zaxxer,org.apache.activemq,org.apache.geronimo.specs,org.fusesource.hawtbuf,org.apache.kafka,com.github.luben,org.lz4,org.xerial.snappy,com.rabbitmq,jakarta.annotation,org.apache.thrift,org.apache.logging.log4j
+                com.google.auto.value,com.google.guava,io.dropwizard.metrics,com.datastax.oss,com.github.jnr,org.ow2.asm,org.jooq,javax.xml.bind,org.mariadb.jdbc,com.zaxxer,org.apache.activemq,org.apache.geronimo.specs,org.fusesource.hawtbuf,org.apache.kafka,com.github.luben,org.lz4,org.xerial.snappy,com.rabbitmq,jakarta.annotation,org.apache.thrift,org.apache.logging.log4j
               </excludeGroupIds>
               <excludes>
                 <!-- Actuator -->

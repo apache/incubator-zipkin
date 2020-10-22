@@ -111,7 +111,7 @@ public final class InMemoryStorage extends StorageComponent implements SpanStore
    * visible (via /api/v2/trace/{traceId}) when instrumentation report the same spans multiple
    * times.
    */
-  private final SortedMultimap<TraceIdTimestamp, Span> spansByTraceIdTimeStamp =
+  private final SortedMultimap<TraceIdTimestamp, Span> spansByTraceIdTimestamp =
     new SortedMultimap<TraceIdTimestamp, Span>(TIMESTAMP_DESCENDING) {
       @Override Collection<Span> valueContainer() {
         return new LinkedHashSet<Span>();
@@ -119,7 +119,7 @@ public final class InMemoryStorage extends StorageComponent implements SpanStore
     };
 
   /** This supports span lookup by {@link Span#traceId() lower 64-bits of the trace ID} */
-  private final SortedMultimap<String, TraceIdTimestamp> traceIdToTraceIdTimeStamps =
+  private final SortedMultimap<String, TraceIdTimestamp> traceIdToTraceIdTimestamps =
     new SortedMultimap<String, TraceIdTimestamp>(STRING_COMPARATOR) {
       @Override Collection<TraceIdTimestamp> valueContainer() {
         return new LinkedHashSet<TraceIdTimestamp>();
@@ -172,8 +172,8 @@ public final class InMemoryStorage extends StorageComponent implements SpanStore
 
   public synchronized void clear() {
     acceptedSpanCount.set(0);
-    traceIdToTraceIdTimeStamps.clear();
-    spansByTraceIdTimeStamp.clear();
+    traceIdToTraceIdTimestamps.clear();
+    spansByTraceIdTimestamp.clear();
     serviceToTraceIds.clear();
     serviceToRemoteServiceNames.clear();
     serviceToSpanNames.clear();
@@ -188,14 +188,14 @@ public final class InMemoryStorage extends StorageComponent implements SpanStore
     int delta = spans.size();
     acceptedSpanCount.addAndGet(delta);
 
-    int spansToRecover = (spansByTraceIdTimeStamp.size() + delta) - maxSpanCount;
+    int spansToRecover = (spansByTraceIdTimestamp.size() + delta) - maxSpanCount;
     evictToRecoverSpans(spansToRecover);
     for (Span span : spans) {
-      long timestamp = span.timestampAsLong();
+      long timestamp = span.timestampAsLong() / 1000L;
       String lowTraceId = lowTraceId(span.traceId());
       TraceIdTimestamp traceIdTimeStamp = new TraceIdTimestamp(lowTraceId, timestamp);
-      spansByTraceIdTimeStamp.put(traceIdTimeStamp, span);
-      traceIdToTraceIdTimeStamps.put(lowTraceId, traceIdTimeStamp);
+      spansByTraceIdTimestamp.put(traceIdTimeStamp, span);
+      traceIdToTraceIdTimestamps.put(lowTraceId, traceIdTimeStamp);
 
       if (!searchEnabled) continue;
       String serviceName = span.localServiceName();
@@ -262,12 +262,12 @@ public final class InMemoryStorage extends StorageComponent implements SpanStore
   /** Returns the count of spans evicted. */
   private int deleteOldestTrace() {
     int spansEvicted = 0;
-    String lowTraceId = spansByTraceIdTimeStamp.delegate.lastKey().lowTraceId;
-    Collection<TraceIdTimestamp> traceIdTimeStamps = traceIdToTraceIdTimeStamps.remove(lowTraceId);
+    String lowTraceId = spansByTraceIdTimestamp.delegate.lastKey().lowTraceId;
+    Collection<TraceIdTimestamp> traceIdTimeStamps = traceIdToTraceIdTimestamps.remove(lowTraceId);
     for (Iterator<TraceIdTimestamp> traceIdTimeStampIter = traceIdTimeStamps.iterator();
       traceIdTimeStampIter.hasNext(); ) {
       TraceIdTimestamp traceIdTimeStamp = traceIdTimeStampIter.next();
-      Collection<Span> spans = spansByTraceIdTimeStamp.remove(traceIdTimeStamp);
+      Collection<Span> spans = spansByTraceIdTimestamp.remove(traceIdTimeStamp);
       spansEvicted += spans.size();
     }
     if (searchEnabled) {
@@ -284,11 +284,11 @@ public final class InMemoryStorage extends StorageComponent implements SpanStore
   }
 
   synchronized Call<List<List<Span>>> getTraces(QueryRequest request, boolean strictTraceId) {
-    Set<String> traceIdsInTimerange = traceIdsDescendingByTimestamp(request);
-    if (traceIdsInTimerange.isEmpty()) return Call.emptyList();
+    Set<String> lowTraceIdsInRange = traceIdsDescendingByTimestamp(request);
+    if (lowTraceIdsInRange.isEmpty()) return Call.emptyList();
 
     List<List<Span>> result = new ArrayList<List<Span>>();
-    for (Iterator<String> lowTraceId = traceIdsInTimerange.iterator();
+    for (Iterator<String> lowTraceId = lowTraceIdsInRange.iterator();
       lowTraceId.hasNext() && result.size() < request.limit(); ) {
       List<Span> next = spansByTraceId(lowTraceId.next());
       if (!request.test(next)) continue;
@@ -321,7 +321,7 @@ public final class InMemoryStorage extends StorageComponent implements SpanStore
   /** Used for testing. Returns all traces unconditionally. */
   public synchronized List<List<Span>> getTraces() {
     List<List<Span>> result = new ArrayList<List<Span>>();
-    for (String lowTraceId : traceIdToTraceIdTimeStamps.keySet()) {
+    for (String lowTraceId : traceIdToTraceIdTimestamps.keySet()) {
       List<Span> sameTraceId = spansByTraceId(lowTraceId);
       if (strictTraceId) {
         result.addAll(strictByTraceId(sameTraceId));
@@ -333,8 +333,8 @@ public final class InMemoryStorage extends StorageComponent implements SpanStore
   }
 
   /** Used for testing. Returns all dependency links unconditionally. */
-  public List<DependencyLink> getDependencies() {
-    return LinkDependencies.INSTANCE.map(getTraces());
+  public synchronized List<DependencyLink> getDependencies() {
+    return getDependencyLinks(traceIdToTraceIdTimestamps.keySet());
   }
 
   Set<String> traceIdsDescendingByTimestamp(QueryRequest request) {
@@ -343,15 +343,19 @@ public final class InMemoryStorage extends StorageComponent implements SpanStore
     Collection<TraceIdTimestamp> traceIdTimestamps =
       request.serviceName() != null
         ? traceIdTimestampsByServiceName(request.serviceName())
-        : spansByTraceIdTimeStamp.keySet();
-
-    long endTs = request.endTs() * 1000;
-    long startTs = endTs - request.lookback() * 1000;
+        : spansByTraceIdTimestamp.keySet();
 
     if (traceIdTimestamps == null || traceIdTimestamps.isEmpty()) return Collections.emptySet();
+
+    return lowTraceIdsInRange(traceIdTimestamps, request.endTs, request.lookback);
+  }
+
+  static Set<String> lowTraceIdsInRange(
+    Collection<TraceIdTimestamp> descendingByTimestamp, long endTs, long lookback) {
+    long beginTs = endTs - lookback;
     Set<String> result = new LinkedHashSet<String>();
-    for (TraceIdTimestamp traceIdTimestamp : traceIdTimestamps) {
-      if (traceIdTimestamp.timestamp >= startTs || traceIdTimestamp.timestamp <= endTs) {
+    for (TraceIdTimestamp traceIdTimestamp : descendingByTimestamp) {
+      if (traceIdTimestamp.timestamp >= beginTs && traceIdTimestamp.timestamp <= endTs) {
         result.add(traceIdTimestamp.lowTraceId);
       }
     }
@@ -421,14 +425,26 @@ public final class InMemoryStorage extends StorageComponent implements SpanStore
     return Call.<List<String>>create(new ArrayList<String>(serviceToSpanNames.get(service)));
   }
 
-  @Override public Call<List<DependencyLink>> getDependencies(long endTs, long lookback) {
-    QueryRequest request =
-      QueryRequest.newBuilder().endTs(endTs).lookback(lookback).limit(Integer.MAX_VALUE).build();
+  @Override
+  public synchronized Call<List<DependencyLink>> getDependencies(long endTs, long lookback) {
+    if (endTs <= 0) throw new IllegalArgumentException("endTs <= 0");
+    if (lookback <= 0) throw new IllegalArgumentException("lookback <= 0");
 
-    // We don't have a query parameter for strictTraceId when fetching dependency links, so we
-    // ignore traceIdHigh. Otherwise, a single trace can appear as two, doubling callCount.
-    Call<List<List<Span>>> getTracesCall = getTraces(request, false);
-    return getTracesCall.map(LinkDependencies.INSTANCE);
+    Set<String> lowTraceIdsInRange =
+      lowTraceIdsInRange(spansByTraceIdTimestamp.keySet(), endTs, lookback);
+    List<DependencyLink> links = getDependencyLinks(lowTraceIdsInRange);
+    return Call.create(links);
+  }
+
+  // We don't have a query parameter for strictTraceId when fetching dependency links, so we
+  // ignore traceIdHigh. Otherwise, a single trace can appear as two, doubling callCount.
+  List<DependencyLink> getDependencyLinks(Set<String> lowTraceIdsInRange) {
+    if (lowTraceIdsInRange.isEmpty()) return Collections.emptyList();
+    DependencyLinker linksBuilder = new DependencyLinker();
+    for (String lowTraceId : lowTraceIdsInRange) {
+      linksBuilder.putTrace(spansByTraceId(lowTraceId));
+    }
+    return linksBuilder.link();
   }
 
   @Override public synchronized Call<List<String>> getKeys() {
@@ -441,20 +457,6 @@ public final class InMemoryStorage extends StorageComponent implements SpanStore
     if (key.isEmpty()) throw new IllegalArgumentException("key was empty");
     if (!searchEnabled) return Call.emptyList();
     return Call.<List<String>>create(new ArrayList<String>(autocompleteTags.get(key)));
-  }
-
-  enum LinkDependencies implements Call.Mapper<List<List<Span>>, List<DependencyLink>> {
-    INSTANCE;
-
-    @Override public List<DependencyLink> map(List<List<Span>> traces) {
-      DependencyLinker linksBuilder = new DependencyLinker();
-      for (List<Span> trace : traces) linksBuilder.putTrace(trace);
-      return linksBuilder.link();
-    }
-
-    @Override public String toString() {
-      return "LinkDependencies";
-    }
   }
 
   static final Comparator<String> STRING_COMPARATOR = new Comparator<String>() {
@@ -551,8 +553,8 @@ public final class InMemoryStorage extends StorageComponent implements SpanStore
 
   List<Span> spansByTraceId(String lowTraceId) {
     List<Span> sameTraceId = new ArrayList<Span>();
-    for (TraceIdTimestamp traceIdTimestamp : traceIdToTraceIdTimeStamps.get(lowTraceId)) {
-      sameTraceId.addAll(spansByTraceIdTimeStamp.get(traceIdTimestamp));
+    for (TraceIdTimestamp traceIdTimestamp : traceIdToTraceIdTimestamps.get(lowTraceId)) {
+      sameTraceId.addAll(spansByTraceIdTimestamp.get(traceIdTimestamp));
     }
     return sameTraceId;
   }
@@ -560,7 +562,7 @@ public final class InMemoryStorage extends StorageComponent implements SpanStore
   Collection<TraceIdTimestamp> traceIdTimestampsByServiceName(String serviceName) {
     List<TraceIdTimestamp> traceIdTimestamps = new ArrayList<TraceIdTimestamp>();
     for (String lowTraceId : serviceToTraceIds.get(serviceName)) {
-      traceIdTimestamps.addAll(traceIdToTraceIdTimeStamps.get(lowTraceId));
+      traceIdTimestamps.addAll(traceIdToTraceIdTimestamps.get(lowTraceId));
     }
     Collections.sort(traceIdTimestamps, TIMESTAMP_DESCENDING);
     return traceIdTimestamps;

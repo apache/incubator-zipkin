@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -30,6 +30,17 @@ class ITInMemoryStorage {
 
   @Nested
   class ITSpanStore extends zipkin2.storage.ITSpanStore<InMemoryStorage> {
+    @Override protected StorageComponent.Builder newStorageBuilder(TestInfo testInfo) {
+      return InMemoryStorage.newBuilder();
+    }
+
+    @Override public void clear() {
+      storage.clear();
+    }
+  }
+
+  @Nested
+  class ITSpanStoreHeavy extends zipkin2.storage.ITSpanStoreHeavy<InMemoryStorage> {
     @Override protected StorageComponent.Builder newStorageBuilder(TestInfo testInfo) {
       return InMemoryStorage.newBuilder();
     }
@@ -85,6 +96,17 @@ class ITInMemoryStorage {
 
   @Nested
   class ITDependencies extends zipkin2.storage.ITDependencies<InMemoryStorage> {
+    @Override protected StorageComponent.Builder newStorageBuilder(TestInfo testInfo) {
+      return InMemoryStorage.newBuilder();
+    }
+
+    @Override public void clear() {
+      storage.clear();
+    }
+  }
+
+  @Nested
+  class ITDependenciesHeavy extends zipkin2.storage.ITDependenciesHeavy<InMemoryStorage> {
     @Override protected StorageComponent.Builder newStorageBuilder(TestInfo testInfo) {
       return InMemoryStorage.newBuilder();
     }

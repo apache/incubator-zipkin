@@ -13,71 +13,66 @@
  */
 package zipkin2.storage.cassandra.v1;
 
-import com.datastax.driver.core.PreparedStatement;
-import com.datastax.driver.core.ResultSet;
-import com.datastax.driver.core.ResultSetFuture;
-import com.datastax.driver.core.Row;
-import com.datastax.driver.core.Session;
-import com.datastax.driver.core.querybuilder.QueryBuilder;
-import com.datastax.driver.core.querybuilder.Select;
+import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.cql.AsyncResultSet;
+import com.datastax.oss.driver.api.core.cql.PreparedStatement;
+import com.datastax.oss.driver.api.core.cql.Row;
 import java.nio.ByteBuffer;
+import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
+import java.util.concurrent.CompletionStage;
 import zipkin2.Call;
 import zipkin2.DependencyLink;
 import zipkin2.internal.Dependencies;
 import zipkin2.internal.DependencyLinker;
 import zipkin2.storage.cassandra.internal.call.ResultSetFutureCall;
 
+import static zipkin2.storage.cassandra.v1.Tables.DEPENDENCIES;
+
 final class SelectDependencies extends ResultSetFutureCall<List<DependencyLink>> {
-  static class Factory {
-    final Session session;
+  static final class Factory {
+    final CqlSession session;
     final PreparedStatement preparedStatement;
 
-    Factory(Session session) {
+    Factory(CqlSession session) {
       this.session = session;
-      Select.Where select =
-          QueryBuilder.select("dependencies")
-              .from("dependencies")
-              .where(QueryBuilder.in("day", QueryBuilder.bindMarker("days")));
-      this.preparedStatement = session.prepare(select);
+      this.preparedStatement = session.prepare("SELECT dependencies"
+        + " FROM " + DEPENDENCIES
+        + " WHERE day IN ?");
     }
 
     Call<List<DependencyLink>> create(long endTs, long lookback) {
-      List<Date> days = CassandraUtil.getDays(endTs, lookback);
+      List<Instant> days = CassandraUtil.getDays(endTs, lookback);
       return new SelectDependencies(this, days);
     }
   }
 
   final Factory factory;
-  final List<Date> epochDays;
+  final List<Instant> epochDays;
 
-  SelectDependencies(Factory factory, List<Date> epochDays) {
+  SelectDependencies(Factory factory, List<Instant> epochDays) {
     this.factory = factory;
     this.epochDays = epochDays;
   }
 
-  @Override
-  protected ResultSetFuture newFuture() {
-    return factory.session.executeAsync(factory.preparedStatement.bind().setList("days", epochDays));
+  @Override protected CompletionStage<AsyncResultSet> newCompletionStage() {
+    return factory.session.executeAsync(factory.preparedStatement.boundStatementBuilder()
+      .setList(0, epochDays, Instant.class).build());
   }
 
-  @Override
-  public String toString() {
+  @Override public String toString() {
     return "SelectDependencies{days=" + epochDays + "}";
   }
 
-  @Override
-  public SelectDependencies clone() {
+  @Override public SelectDependencies clone() {
     return new SelectDependencies(factory, epochDays);
   }
 
-  @Override
-  public List<DependencyLink> map(ResultSet rs) {
+  @Override public List<DependencyLink> map(AsyncResultSet rs) {
     List<DependencyLink> unmerged = new ArrayList<>();
-    for (Row row : rs) {
-      ByteBuffer encodedDayOfDependencies = row.getBytes("dependencies");
+    for (Row row : rs.currentPage()) {
+      ByteBuffer encodedDayOfDependencies = row.getBytesUnsafe(0);
       unmerged.addAll(Dependencies.fromThrift(encodedDayOfDependencies).links());
     }
     return DependencyLinker.merge(unmerged);

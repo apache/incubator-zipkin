@@ -13,33 +13,35 @@
  */
 package zipkin2.storage;
 
-import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 import zipkin2.Call;
 import zipkin2.Callback;
 import zipkin2.Endpoint;
 import zipkin2.Span;
-import zipkin2.internal.Trace;
+import zipkin2.TestObjects;
 
 import static java.util.Arrays.asList;
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.failBecauseExceptionWasNotThrown;
-import static zipkin2.TestObjects.BACKEND;
-import static zipkin2.TestObjects.CLIENT_SPAN;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static zipkin2.Span.Kind.CLIENT;
 import static zipkin2.TestObjects.DAY;
-import static zipkin2.TestObjects.FRONTEND;
-import static zipkin2.TestObjects.LOTS_OF_SPANS;
 import static zipkin2.TestObjects.TODAY;
-import static zipkin2.TestObjects.TRACE;
-import static zipkin2.TestObjects.TRACE_STARTTS;
+import static zipkin2.TestObjects.appendSuffix;
+import static zipkin2.TestObjects.endTs;
+import static zipkin2.TestObjects.newClientSpan;
+import static zipkin2.TestObjects.newTrace;
+import static zipkin2.TestObjects.newTraceId;
+import static zipkin2.TestObjects.spanBuilder;
+import static zipkin2.TestObjects.suffixServiceName;
 
 /**
  * Base test for {@link SpanStore}.
@@ -53,46 +55,49 @@ public abstract class ITSpanStore<T extends StorageComponent> extends ITStorage<
   }
 
   /** This would only happen when the store layer is bootstrapping, or has been purged. */
-  @Test protected void allShouldWorkWhenEmpty() throws IOException {
+  @Test protected void allShouldWorkWhenEmpty() throws Exception {
     QueryRequest.Builder q = requestBuilder().serviceName("service");
-    assertThat(store().getTraces(q.build()).execute()).isEmpty();
-    assertThat(store().getTraces(q.remoteServiceName("remotey").build()).execute()).isEmpty();
-    assertThat(store().getTraces(q.spanName("methodcall").build()).execute()).isEmpty();
-    assertThat(store().getTraces(q.parseAnnotationQuery("custom").build()).execute()).isEmpty();
-    assertThat(store().getTraces(q.parseAnnotationQuery("BAH=BEH").build()).execute()).isEmpty();
+    assertGetTracesReturnsEmpty(q.build());
+    assertGetTracesReturnsEmpty(q.remoteServiceName("remotey").build());
+    assertGetTracesReturnsEmpty(q.spanName("methodcall").build());
+    assertGetTracesReturnsEmpty(q.parseAnnotationQuery("custom").build());
+    assertGetTracesReturnsEmpty(q.parseAnnotationQuery("BAH=BEH").build());
   }
 
   /** This is unlikely and means instrumentation sends empty spans by mistake. */
-  @Test protected void allShouldWorkWhenNoIndexableDataYet() throws IOException {
-    accept(Span.newBuilder().traceId("1").id("1").build());
+  @Test protected void allShouldWorkWhenNoIndexableDataYet() throws Exception {
+    accept(Span.newBuilder().traceId(newTraceId()).id("1").build());
 
     allShouldWorkWhenEmpty();
   }
 
-  @Test protected void consumer_properlyImplementsCallContract_execute() throws IOException {
-    Call<Void> call = storage.spanConsumer().accept(asList(LOTS_OF_SPANS[0]));
+  @Test protected void consumer_implementsCall_execute(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span span = spanBuilder(testSuffix).build();
+
+    Call<Void> call = storage.spanConsumer().accept(asList(span));
 
     // Ensure the implementation didn't accidentally do I/O at assembly time.
-    assertThat(traces().getTrace(LOTS_OF_SPANS[0].traceId()).execute()).isEmpty();
+    assertGetTraceReturnsEmpty(span.traceId());
     call.execute();
+    blockWhileInFlight();
 
-    assertThat(traces().getTrace(LOTS_OF_SPANS[0].traceId()).execute())
-      .containsExactly(LOTS_OF_SPANS[0]);
+    assertGetTraceReturns(span);
 
-    try {
-      call.execute();
-      failBecauseExceptionWasNotThrown(IllegalArgumentException.class);
-    } catch (IllegalStateException e) {
-    }
+    assertThatThrownBy(call::execute)
+      .isInstanceOf(IllegalStateException.class);
 
     // no problem to clone a call
     call.clone().execute();
   }
 
-  @Test protected void consumer_properlyImplementsCallContract_submit() throws Exception {
-    Call<Void> call = storage.spanConsumer().accept(asList(LOTS_OF_SPANS[0]));
+  @Test protected void consumer_implementsCall_submit(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span span = spanBuilder(testSuffix).build();
+
+    Call<Void> call = storage.spanConsumer().accept(asList(span));
     // Ensure the implementation didn't accidentally do I/O at assembly time.
-    assertThat(traces().getTrace(LOTS_OF_SPANS[0].traceId()).execute()).isEmpty();
+    assertGetTraceReturnsEmpty(span.traceId());
 
     CountDownLatch latch = new CountDownLatch(1);
     Callback<Void> callback = new Callback<Void>() {
@@ -107,74 +112,79 @@ public abstract class ITSpanStore<T extends StorageComponent> extends ITStorage<
 
     call.enqueue(callback);
     latch.await();
+    blockWhileInFlight();
 
-    assertThat(traces().getTrace(LOTS_OF_SPANS[0].traceId()).execute())
-      .containsExactly(LOTS_OF_SPANS[0]);
+    assertGetTraceReturns(span);
 
-    try {
-      call.enqueue(callback);
-      failBecauseExceptionWasNotThrown(IllegalArgumentException.class);
-    } catch (IllegalStateException e) {
-    }
+    assertThatThrownBy(() -> call.enqueue(callback))
+      .isInstanceOf(IllegalStateException.class);
 
     // no problem to clone a call
     call.clone().execute();
   }
 
-  @Test protected void getTraces_groupsTracesTogether() throws IOException {
-    Span traceASpan1 = Span.newBuilder()
-      .traceId("a")
-      .id("1")
-      .timestamp((TODAY + 1) * 1000L)
-      .localEndpoint(FRONTEND)
-      .build();
+  @Test protected void getTraces_groupsTracesTogether(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span traceASpan1 = spanBuilder(testSuffix).timestamp((TODAY + 1) * 1000L).build();
     Span traceASpan2 = traceASpan1.toBuilder().id("2").timestamp((TODAY + 2) * 1000L).build();
-    Span traceBSpan1 = traceASpan1.toBuilder().traceId("b").build();
-    Span traceBSpan2 = traceASpan2.toBuilder().traceId("b").build();
+
+    String traceId2 = newTraceId();
+    Span traceBSpan1 = traceASpan1.toBuilder().traceId(traceId2).build();
+    Span traceBSpan2 = traceASpan2.toBuilder().traceId(traceId2).build();
 
     accept(traceASpan1, traceBSpan1, traceASpan2, traceBSpan2);
 
-    assertThat(sortTraces(store().getTraces(requestBuilder().build()).execute()))
-      .containsExactlyInAnyOrder(asList(traceASpan1, traceASpan2),
-        asList(traceBSpan1, traceBSpan2));
+    assertGetTracesReturns(
+      requestBuilder().build(),
+      asList(traceASpan1, traceASpan2), asList(traceBSpan1, traceBSpan2)
+    );
   }
 
-  @Test protected void getTraces_considersBitsAbove64bit() throws IOException {
+  @Test protected void getTraces_considersBitsAbove64bit(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    String traceId = newTraceId();
+    Endpoint frontend = suffixServiceName(TestObjects.FRONTEND, testSuffix);
+
     // 64-bit trace ID
-    Span span1 = Span.newBuilder().traceId(CLIENT_SPAN.traceId().substring(16)).id("1")
+    Span span1 = Span.newBuilder().traceId(traceId.substring(16)).id("1")
       .putTag("foo", "1")
       .timestamp(TODAY * 1000L)
-      .localEndpoint(FRONTEND)
+      .localEndpoint(frontend)
       .build();
     // 128-bit trace ID prefixed by above
-    Span span2 = span1.toBuilder().traceId(CLIENT_SPAN.traceId()).putTag("foo", "2").build();
+    Span span2 = span1.toBuilder().traceId(traceId).putTag("foo", "2").build();
     // Different 128-bit trace ID prefixed by above
     Span span3 = span1.toBuilder().traceId("1" + span1.traceId()).putTag("foo", "3").build();
 
     accept(span1, span2, span3);
 
     for (Span span : Arrays.asList(span1, span2, span3)) {
-      assertThat(store().getTraces(requestBuilder()
-        .serviceName("frontend")
-        .parseAnnotationQuery("foo=" + span.tags().get("foo")).build()
-      ).execute()).flatExtracting(t -> t).containsExactly(span);
+      assertGetTracesReturns(
+        requestBuilder().serviceName(frontend.serviceName())
+          .parseAnnotationQuery("foo=" + span.tags().get("foo"))
+          .build(),
+        asList(span));
     }
   }
 
-  @Test protected void getTraces_filteringMatchesMostRecentTraces() throws Exception {
+  @Test protected void getTraces_filteringMatchesMostRecentTraces(TestInfo testInfo)
+    throws Exception {
+    String testSuffix = testSuffix(testInfo);
     List<Endpoint> endpoints = IntStream.rangeClosed(1, 10)
-      .mapToObj(i -> Endpoint.newBuilder().serviceName("service" + i).ip("127.0.0.1").build())
+      .mapToObj(i -> Endpoint.newBuilder()
+        .serviceName(appendSuffix("service" + i, testSuffix))
+        .ip("127.0.0.1")
+        .build())
       .collect(Collectors.toList());
 
     long gapBetweenSpans = 100;
-    Span[] earlySpans =
-      IntStream.rangeClosed(1, 10).mapToObj(i -> Span.newBuilder().name("early")
-        .traceId(Integer.toHexString(i)).id(Integer.toHexString(i))
-        .timestamp((TODAY - i) * 1000L).duration(1L)
-        .localEndpoint(endpoints.get(i - 1)).build()).toArray(Span[]::new);
+    Span[] earlySpans = IntStream.rangeClosed(1, 10).mapToObj(i -> Span.newBuilder().name("early")
+      .traceId(newTraceId()).id(Integer.toHexString(i))
+      .timestamp((TODAY - i) * 1000L).duration(1L)
+      .localEndpoint(endpoints.get(i - 1)).build()).toArray(Span[]::new);
 
     Span[] lateSpans = IntStream.rangeClosed(1, 10).mapToObj(i -> Span.newBuilder().name("late")
-      .traceId(Integer.toHexString(i + 10)).id(Integer.toHexString(i + 10))
+      .traceId(newTraceId()).id(Integer.toHexString(i + 10))
       .timestamp((TODAY + gapBetweenSpans - i) * 1000L).duration(1L)
       .localEndpoint(endpoints.get(i - 1)).build()).toArray(Span[]::new);
 
@@ -186,154 +196,176 @@ public abstract class ITSpanStore<T extends StorageComponent> extends ITStorage<
     List<Span>[] lateTraces =
       Stream.of(lateSpans).map(Collections::singletonList).toArray(List[]::new);
 
-    assertThat(store().getTraces(requestBuilder().build()).execute())
-      .hasSize(20);
+    assertGetTracesReturnsCount(requestBuilder().build(), 20);
 
-    assertThat(sortTraces(store().getTraces(requestBuilder()
-      .limit(10).build()).execute()))
-      .containsExactly(lateTraces);
+    assertGetTracesReturns(
+      requestBuilder().limit(10).build(),
+      lateTraces);
 
-    assertThat(sortTraces(store().getTraces(requestBuilder()
-      .endTs(TODAY + gapBetweenSpans).lookback(gapBetweenSpans).build()).execute()))
-      .containsExactly(lateTraces);
+    assertGetTracesReturns(
+      requestBuilder().endTs(TODAY + gapBetweenSpans).lookback(gapBetweenSpans).build(),
+      lateTraces);
 
-    assertThat(sortTraces(store().getTraces(requestBuilder()
-      .endTs(TODAY).build()).execute()))
-      .containsExactly(earlyTraces);
+    assertGetTracesReturns(
+      requestBuilder().endTs(TODAY).build(),
+      earlyTraces);
   }
 
-  @Test protected void getTraces_serviceNames() throws Exception {
-    accept(CLIENT_SPAN);
-
-    assertThat(store().getTraces(requestBuilder()
-      .serviceName("frontend" + 1)
-      .build()).execute())
-      .withFailMessage("Results matched even with invalid service name")
-      .isEmpty();
-
-    assertThat(store().getTraces(requestBuilder()
-      .serviceName("frontend")
-      .build()).execute()).flatExtracting(l -> l).contains(CLIENT_SPAN);
-
-    assertThat(store().getTraces(requestBuilder()
-      .serviceName(CLIENT_SPAN.localServiceName())
-      .remoteServiceName(CLIENT_SPAN.remoteServiceName() + 1)
-      .build()).execute())
-      .withFailMessage("Results matched even with invalid remote service name")
-      .isEmpty();
-
-    assertThat(store().getTraces(requestBuilder()
-      .serviceName(CLIENT_SPAN.localServiceName())
-      .remoteServiceName(CLIENT_SPAN.remoteServiceName())
-      .build()).execute()).flatExtracting(l -> l).contains(CLIENT_SPAN);
+  @Test protected void getTraces_serviceNames(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    getTraces_serviceNames(newClientSpan(testSuffix));
   }
 
-  @Test protected void getTraces_serviceNames_mixedTraceIdLength() throws Exception {
+  void getTraces_serviceNames(Span clientSpan) throws Exception {
+    accept(clientSpan);
+
+    assertGetTracesReturnsEmpty(
+      requestBuilder().serviceName(clientSpan.localServiceName() + 1).build());
+
+    assertGetTracesReturns(
+      requestBuilder().serviceName(clientSpan.localServiceName()).build(),
+      asList(clientSpan));
+
+    assertGetTracesReturnsEmpty(
+      requestBuilder()
+        .serviceName(clientSpan.localServiceName())
+        .remoteServiceName(clientSpan.remoteServiceName() + 1)
+        .build());
+
+    assertGetTracesReturns(
+      requestBuilder()
+        .serviceName(clientSpan.localServiceName())
+        .remoteServiceName(clientSpan.remoteServiceName())
+        .build(),
+      asList(clientSpan));
+  }
+
+  @Test protected void getTraces_serviceNames_mixedTraceIdLength(TestInfo testInfo)
+    throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span clientSpan = newClientSpan(testSuffix);
+
     // add a trace with the same trace ID truncated to 64 bits, except different service names.
-    accept(CLIENT_SPAN.toBuilder()
-      .traceId(CLIENT_SPAN.traceId().substring(16))
-      .localEndpoint(Endpoint.newBuilder().serviceName("foo").build())
-      .remoteEndpoint(Endpoint.newBuilder().serviceName("bar").build())
+    accept(spanBuilder(testSuffix)
+      .traceId(clientSpan.traceId().substring(16))
+      .localEndpoint(Endpoint.newBuilder().serviceName(appendSuffix("foo", testSuffix)).build())
+      .remoteEndpoint(Endpoint.newBuilder().serviceName(appendSuffix("bar", testSuffix)).build())
       .build());
 
-    getTraces_serviceNames();
+    getTraces_serviceNames(clientSpan);
   }
 
-  @Test protected void getTraces_spanName() throws Exception {
-    accept(CLIENT_SPAN);
-
-    assertThat(store().getTraces(requestBuilder()
-      .spanName(CLIENT_SPAN.name() + 1)
-      .build()).execute())
-      .withFailMessage("Results matched with an invalid span name")
-      .isEmpty();
-
-    assertThat(store().getTraces(requestBuilder()
-      .serviceName(CLIENT_SPAN.localServiceName())
-      .spanName(CLIENT_SPAN.name() + 1)
-      .build()).execute())
-      .withFailMessage("Results matched with a value service name, but an invalid span name")
-      .isEmpty();
-
-    assertThat(store().getTraces(requestBuilder()
-      .spanName(CLIENT_SPAN.name())
-      .build()).execute()).flatExtracting(l -> l).contains(CLIENT_SPAN);
-
-    assertThat(store().getTraces(requestBuilder()
-      .serviceName(CLIENT_SPAN.localServiceName())
-      .spanName(CLIENT_SPAN.name())
-      .build()).execute()).flatExtracting(l -> l).contains(CLIENT_SPAN);
+  @Test protected void getTraces_spanName(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    getTraces_spanName(newClientSpan(testSuffix));
   }
 
-  @Test protected void getTraces_spanName_mixedTraceIdLength() throws Exception {
+  void getTraces_spanName(Span clientSpan) throws Exception {
+    accept(clientSpan);
+
+    assertGetTracesReturnsEmpty(
+      requestBuilder().spanName(clientSpan.name() + 1).build());
+
+    assertGetTracesReturnsEmpty(
+      requestBuilder()
+        .serviceName(clientSpan.localServiceName())
+        .spanName(clientSpan.name() + 1)
+        .build());
+
+    assertGetTracesReturns(
+      requestBuilder().spanName(clientSpan.name()).build(),
+      asList(clientSpan));
+
+    assertGetTracesReturns(
+      requestBuilder()
+        .serviceName(clientSpan.localServiceName())
+        .spanName(clientSpan.name())
+        .build(),
+      asList(clientSpan));
+  }
+
+  @Test protected void getTraces_spanName_mixedTraceIdLength(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span clientSpan = newClientSpan(testSuffix);
+
     // add a trace with the same trace ID truncated to 64 bits, except the span name.
-    accept(CLIENT_SPAN.toBuilder()
-      .traceId(CLIENT_SPAN.traceId().substring(16))
+    accept(clientSpan.toBuilder()
+      .traceId(clientSpan.traceId().substring(16))
       .name("bar")
       .build());
 
-    getTraces_spanName();
+    getTraces_spanName(clientSpan);
   }
 
-  @Test protected void getTraces_tags() throws Exception {
-    accept(CLIENT_SPAN);
+  @Test protected void getTraces_tags(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span clientSpan = newClientSpan(testSuffix);
 
-    assertThat(store().getTraces(requestBuilder()
-      .annotationQuery(Collections.singletonMap("foo", "bar"))
-      .build()).execute()).isEmpty();
+    accept(clientSpan);
 
-    assertThat(store().getTraces(requestBuilder()
-      .annotationQuery(CLIENT_SPAN.tags())
-      .build()).execute()).flatExtracting(l -> l).contains(CLIENT_SPAN);
+    assertGetTracesReturnsEmpty(
+      requestBuilder().annotationQuery(Collections.singletonMap("foo", "bar")).build());
+
+    assertGetTracesReturns(
+      requestBuilder().annotationQuery(clientSpan.tags()).build(),
+      asList(clientSpan));
   }
 
-  @Test protected void getTraces_minDuration() throws Exception {
-    accept(CLIENT_SPAN);
+  @Test protected void getTraces_minDuration(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span clientSpan = newClientSpan(testSuffix);
 
-    assertThat(store().getTraces(requestBuilder()
-      .minDuration(CLIENT_SPAN.durationAsLong() + 1)
-      .build()).execute()).isEmpty();
+    accept(clientSpan);
 
-    assertThat(store().getTraces(requestBuilder()
-      .minDuration(CLIENT_SPAN.durationAsLong())
-      .build()).execute()).flatExtracting(l -> l).contains(CLIENT_SPAN);
+    assertGetTracesReturnsEmpty(
+      requestBuilder().minDuration(clientSpan.durationAsLong() + 1).build());
+
+    assertGetTracesReturns(
+      requestBuilder().minDuration(clientSpan.durationAsLong()).build(),
+      asList(clientSpan));
   }
 
   // pretend we had a late update of only timestamp/duration info
-  @Test protected void getTraces_lateDuration() throws Exception {
-    Span missingDuration = CLIENT_SPAN.toBuilder().duration(0L).build();
+  @Test protected void getTraces_lateDuration(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span clientSpan = newClientSpan(testSuffix);
+    Span missingDuration = clientSpan.toBuilder().duration(0L).build();
     Span lateDuration = Span.newBuilder()
-      .traceId(CLIENT_SPAN.traceId())
-      .id(CLIENT_SPAN.id())
-      .timestamp(CLIENT_SPAN.timestampAsLong())
-      .duration(CLIENT_SPAN.durationAsLong())
-      .localEndpoint(CLIENT_SPAN.localEndpoint())
+      .traceId(clientSpan.traceId())
+      .id(clientSpan.id())
+      .timestamp(clientSpan.timestampAsLong())
+      .duration(clientSpan.durationAsLong())
+      .localEndpoint(clientSpan.localEndpoint())
       .build();
     accept(missingDuration);
     accept(lateDuration);
 
-    assertThat(store().getTraces(requestBuilder()
-      .minDuration(CLIENT_SPAN.durationAsLong() + 1)
-      .build()).execute()).isEmpty();
+    assertGetTracesReturnsEmpty(
+      requestBuilder().minDuration(clientSpan.durationAsLong() + 1).build());
 
-    // We merge here because MySQL storage doesn't retain the individual documents
-    assertThat(store().getTraces(requestBuilder()
-      .minDuration(CLIENT_SPAN.durationAsLong())
-      .build()).execute()).flatExtracting(Trace::merge).containsExactly(CLIENT_SPAN);
+    assertGetTracesReturns(
+      requestBuilder().minDuration(clientSpan.durationAsLong()).build(),
+      asList(lateDuration, missingDuration));
   }
 
-  @Test protected void getTraces_maxDuration() throws Exception {
-    accept(CLIENT_SPAN);
+  @Test protected void getTraces_maxDuration(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span clientSpan = newClientSpan(testSuffix);
 
-    assertThat(store().getTraces(requestBuilder()
-      .minDuration(CLIENT_SPAN.durationAsLong() - 2)
-      .maxDuration(CLIENT_SPAN.durationAsLong() - 1)
-      .build()).execute()).isEmpty();
+    accept(clientSpan);
 
-    assertThat(store().getTraces(requestBuilder()
-      .minDuration(CLIENT_SPAN.durationAsLong())
-      .maxDuration(CLIENT_SPAN.durationAsLong())
-      .build()).execute()).flatExtracting(l -> l).contains(CLIENT_SPAN);
+    assertGetTracesReturnsEmpty(
+      requestBuilder()
+        .minDuration(clientSpan.durationAsLong() - 2)
+        .maxDuration(clientSpan.durationAsLong() - 1)
+        .build());
+
+    assertGetTracesReturns(
+      requestBuilder()
+        .minDuration(clientSpan.durationAsLong())
+        .maxDuration(clientSpan.durationAsLong())
+        .build(),
+      asList(clientSpan));
   }
 
   /**
@@ -341,14 +373,13 @@ public abstract class ITSpanStore<T extends StorageComponent> extends ITStorage<
    *
    * <p>Notably this guards empty tag values work
    */
-  @Test protected void readback_minimalErrorSpan() throws Exception {
-    String serviceName = "isao01";
-    Span errorSpan = Span.newBuilder()
-      .traceId("dc955a1d4768875d")
-      .id("dc955a1d4768875d")
+  @Test protected void readback_minimalErrorSpan(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    String serviceName = appendSuffix("isao01", testSuffix);
+    Span errorSpan = Span.newBuilder().traceId(newTraceId()).id("1")
       .timestamp(TODAY * 1000L)
       .localEndpoint(Endpoint.newBuilder().serviceName(serviceName).build())
-      .kind(Span.Kind.CLIENT)
+      .kind(CLIENT)
       .putTag("error", "")
       .build();
     accept(errorSpan);
@@ -356,38 +387,33 @@ public abstract class ITSpanStore<T extends StorageComponent> extends ITStorage<
     QueryRequest.Builder requestBuilder =
       requestBuilder().serviceName(serviceName); // so this doesn't die on cassandra v1
 
-    assertThat(store().getTraces(requestBuilder.build()).execute())
-      .flatExtracting(l -> l).contains(errorSpan);
+    assertGetTracesReturns(requestBuilder.build(), asList(errorSpan));
 
-    assertThat(store().getTraces(requestBuilder.parseAnnotationQuery("error").build()).execute())
-      .flatExtracting(l -> l).contains(errorSpan);
-    assertThat(store().getTraces(requestBuilder.parseAnnotationQuery("error=1").build()).execute())
-      .isEmpty();
+    assertGetTracesReturns(
+      requestBuilder.parseAnnotationQuery("error").build(), asList(errorSpan));
 
-    assertThat(traces().getTrace(errorSpan.traceId()).execute())
-      .contains(errorSpan);
+    assertGetTracesReturnsEmpty(
+      requestBuilder.parseAnnotationQuery("error=1").build());
+
+    assertGetTraceReturns(errorSpan);
   }
 
   /**
    * While large spans are discouraged, and maybe not indexed, we should be able to read them back.
    */
-  @Test protected void readsBackLargeValues() throws IOException {
+  @Test protected void readsBackLargeValues(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
     char[] kilobyteOfText = new char[1024];
     Arrays.fill(kilobyteOfText, 'a');
 
     // Make a span that's over 1KiB in size
-    Span span = Span.newBuilder().traceId("1").id("1").name("big")
-      .timestamp(TODAY * 1000L + 100L).duration(200L)
-      .localEndpoint(FRONTEND)
-      .putTag("a", new String(kilobyteOfText)).build();
+    Span span = spanBuilder(testSuffix).name("big").putTag("a", new String(kilobyteOfText)).build();
 
     accept(span);
 
     // read back to ensure the data wasn't truncated
-    assertThat(store().getTraces(requestBuilder().build()).execute())
-      .containsExactly(asList(span));
-    assertThat(traces().getTrace(span.traceId()).execute())
-      .containsExactly(span);
+    assertGetTracesReturns(requestBuilder().build(), asList(span));
+    assertGetTraceReturns(span);
   }
 
   /**
@@ -398,11 +424,10 @@ public abstract class ITSpanStore<T extends StorageComponent> extends ITStorage<
    *   <li>tag with nested dots (can be confused as nested objects)</li>
    * </ul>
    */
-  @Test protected void spanWithProblematicData() throws IOException {
+  @Test protected void spanWithProblematicData(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
     // Intentionally store in two fragments to try to trigger storage problems with dots
-    Span part1 = Span.newBuilder().traceId("a").id("b")
-      .timestamp((TODAY + 50L) * 1000L)
-      .localEndpoint(FRONTEND)
+    Span part1 = spanBuilder(testSuffix)
       .putTag("http.path", "/api")
       .build();
     accept(part1);
@@ -415,183 +440,162 @@ public abstract class ITSpanStore<T extends StorageComponent> extends ITStorage<
       .build();
     accept(part2);
 
-    // We merge here because MySQL storage doesn't retain the individual documents
-    Span merged = Trace.merge(asList(part1, part2)).get(0);
+    assertGetTracesReturns(
+      requestBuilder().serviceName(part1.localServiceName()).spanName(json).build(),
+      asList(part2, part1)
+    );
 
-    QueryRequest query = requestBuilder().serviceName("frontend").spanName(json).build();
-    assertThat(store().getTraces(query).execute()).flatExtracting(Trace::merge)
-      .containsExactly(merged);
-
-    assertThat(traces().getTrace(part1.traceId()).map(Trace::merge).execute())
-      .containsExactly(merged);
-  }
-
-  /**
-   * Formerly, a bug was present where cassandra didn't index more than bucket count traces per
-   * millisecond. This stores a lot of spans to ensure indexes work under high-traffic scenarios.
-   */
-  @Test protected void getTraces_manyTraces() throws IOException {
-    int traceCount = 1000;
-    Span span = LOTS_OF_SPANS[0];
-    Map.Entry<String, String> tag = span.tags().entrySet().iterator().next();
-
-    accept(Arrays.copyOfRange(LOTS_OF_SPANS, 0, traceCount));
-
-    assertThat(store().getTraces(requestBuilder().limit(traceCount).build()).execute())
-      .hasSize(traceCount);
-
-    QueryRequest.Builder builder =
-      requestBuilder().limit(traceCount).serviceName(span.localServiceName());
-
-    assertThat(store().getTraces(builder.build()).execute())
-      .hasSize(traceCount);
-
-    assertThat(
-      store().getTraces(builder.remoteServiceName(span.remoteServiceName()).build()).execute())
-      .hasSize(traceCount);
-
-    assertThat(store().getTraces(builder.spanName(span.name()).build()).execute())
-      .hasSize(traceCount);
-
-    assertThat(
-      store().getTraces(builder.parseAnnotationQuery(tag.getKey() + "=" + tag.getValue()).build())
-        .execute())
-      .hasSize(traceCount);
+    assertGetTraceReturns(part1.traceId(), asList(part2, part1));
   }
 
   /** Shows that duration queries go against the root span, not the child */
-  @Test protected void getTraces_duration() throws IOException {
-    setupDurationData();
+  @Test protected void getTraces_duration(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Endpoint frontend = suffixServiceName(TestObjects.FRONTEND, testSuffix);
+    Endpoint backend = suffixServiceName(TestObjects.BACKEND, testSuffix);
+    Endpoint db = suffixServiceName(TestObjects.DB, testSuffix);
+
+    List<List<Span>> traces = setupDurationData(testInfo);
+    List<Span> trace1 = traces.get(0), trace2 = traces.get(1), trace3 = traces.get(2);
 
     QueryRequest.Builder q = requestBuilder().endTs(TODAY).lookback(DAY); // instead of since epoch
-    QueryRequest query;
 
     // Min duration is inclusive and is applied by service.
-    query = q.serviceName("service1").minDuration(200_000L).build();
-    assertThat(store().getTraces(query).execute()).extracting(t -> t.get(0).traceId())
-      .containsExactly("0000000000000001");
+    assertGetTracesReturns(
+      q.serviceName(frontend.serviceName()).minDuration(200_000L).build(),
+      trace1);
 
-    query = q.serviceName("service3").minDuration(200_000L).build();
-    assertThat(store().getTraces(query).execute()).extracting(t -> t.get(0).traceId())
-      .containsExactly("0000000000000002");
+    assertGetTracesReturns(
+      q.serviceName(db.serviceName()).minDuration(200_000L).build(),
+      trace2);
 
     // Duration bounds aren't limited to root spans: they apply to all spans by service in a trace
-    query = q.serviceName("service2").minDuration(50_000L).maxDuration(150_000L).build();
-    assertThat(store().getTraces(query).execute()).extracting(t -> t.get(0).traceId())
-      // service2 root of trace 3, but middle of 1 and 2.
-      .containsExactlyInAnyOrder("0000000000000003", "0000000000000002", "0000000000000001");
+    assertGetTracesReturns(
+      q.serviceName(backend.serviceName())
+        .minDuration(50_000L)
+        .maxDuration(150_000L)
+        .build(),
+      trace1, trace2, trace3);
 
     // Remote service name should apply to the duration filter
-    query = q.serviceName("service1").remoteServiceName("service2").maxDuration(50_000L).build();
-    assertThat(store().getTraces(query).execute()).extracting(t -> t.get(0).traceId())
-      .containsExactly("0000000000000002");
+    assertGetTracesReturns(
+      q.serviceName(frontend.serviceName())
+        .remoteServiceName(backend.serviceName())
+        .maxDuration(50_000L)
+        .build(),
+      trace2);
 
     // Span name should apply to the duration filter
-    query = q.serviceName("service2").spanName("zip").maxDuration(50_000L).build();
-    assertThat(store().getTraces(query).execute()).extracting(t -> t.get(0).traceId())
-      .containsExactly("0000000000000003");
+    assertGetTracesReturns(
+      q.serviceName(backend.serviceName()).spanName("zip").maxDuration(50_000L).build(),
+      trace3);
 
     // Max duration should filter our longer spans from the same service
-    query = q.serviceName("service2").minDuration(50_000L).maxDuration(50_000L).build();
-    assertThat(store().getTraces(query).execute()).extracting(t -> t.get(0).traceId())
-      .containsExactly("0000000000000003");
+    assertGetTracesReturns(
+      q.serviceName(backend.serviceName())
+        .minDuration(50_000L)
+        .maxDuration(50_000L)
+        .build(),
+      trace3);
   }
 
   /**
    * Spans and traces are meaningless unless they have a timestamp. While unlikely, this could
    * happen if a binary annotation is logged before a timestamped one is.
    */
-  @Test protected void getTraces_absentWhenNoTimestamp() throws IOException {
+  @Test protected void getTraces_absentWhenNoTimestamp(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span span = spanBuilder(testSuffix).build();
+    Span spanWithoutTimestamp = span.toBuilder().timestamp(0L).duration(0L).build();
+
     // Index the service name but no timestamp of any sort
-    accept(Span.newBuilder()
-      .traceId(CLIENT_SPAN.traceId())
-      .id(CLIENT_SPAN.id())
-      .name(CLIENT_SPAN.name())
-      .localEndpoint(CLIENT_SPAN.localEndpoint())
-      .build()
-    );
+    accept(spanWithoutTimestamp);
 
-    assertThat(store().getTraces(
-      requestBuilder().serviceName(CLIENT_SPAN.localServiceName()).build()
-    ).execute()).isEmpty();
+    assertGetTracesReturnsEmpty(
+      requestBuilder().serviceName(span.localServiceName()).build());
 
-    assertThat(store().getTraces(
-      requestBuilder()
-        .serviceName(CLIENT_SPAN.localServiceName())
-        .spanName(CLIENT_SPAN.remoteServiceName())
-        .build()
-    ).execute()).isEmpty();
+    assertGetTracesReturnsEmpty(
+      requestBuilder().serviceName(span.localServiceName())
+        .spanName(span.remoteServiceName())
+        .build());
 
-    assertThat(store().getTraces(
-      requestBuilder()
-        .serviceName(CLIENT_SPAN.localServiceName())
-        .spanName(CLIENT_SPAN.name())
-        .build()
-    ).execute()).isEmpty();
+    assertGetTracesReturnsEmpty(
+      requestBuilder().serviceName(span.localServiceName())
+        .spanName(span.name())
+        .build());
 
     // now store the timestamped span
-    accept(CLIENT_SPAN);
+    accept(span);
 
-    assertThat(store().getTraces(
-      requestBuilder().serviceName(CLIENT_SPAN.localServiceName()).build()
-    ).execute()).isNotEmpty();
+    assertGetTracesReturns(
+      requestBuilder().serviceName(span.localServiceName()).build(),
+      asList(spanWithoutTimestamp, span));
 
-    assertThat(store().getTraces(
+    assertGetTracesReturns(
       requestBuilder()
-        .serviceName(CLIENT_SPAN.localServiceName())
-        .remoteServiceName(CLIENT_SPAN.remoteServiceName())
-        .build()
-    ).execute()).isNotEmpty();
+        .serviceName(span.localServiceName())
+        .remoteServiceName(span.remoteServiceName())
+        .build(),
+      asList(spanWithoutTimestamp, span));
 
-    assertThat(store().getTraces(
+    assertGetTracesReturns(
       requestBuilder()
-        .serviceName(CLIENT_SPAN.localServiceName())
-        .spanName(CLIENT_SPAN.name())
-        .build()
-    ).execute()).isNotEmpty();
+        .serviceName(span.localServiceName())
+        .spanName(span.name())
+        .build(),
+      asList(spanWithoutTimestamp, span));
   }
 
-  @Test protected void getTraces_annotation() throws IOException {
-    accept(CLIENT_SPAN);
+  @Test protected void getTraces_annotation(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span clientSpan = newClientSpan(testSuffix).toBuilder()
+      .addAnnotation(TODAY, "foo")
+      .build();
+
+    accept(clientSpan);
 
     // fetch by time based annotation, find trace
-    assertThat(store().getTraces(
+    assertGetTracesReturns(
       requestBuilder()
-        .serviceName("frontend")
-        .parseAnnotationQuery(CLIENT_SPAN.annotations().get(0).value())
-        .build()
-    ).execute()).isNotEmpty();
+        .serviceName(clientSpan.localServiceName())
+        .parseAnnotationQuery(clientSpan.annotations().get(0).value())
+        .build(),
+      asList(clientSpan));
 
     // should find traces by a tag
-    Map.Entry<String, String> tag = CLIENT_SPAN.tags().entrySet().iterator().next();
-    assertThat(store().getTraces(
+    Map.Entry<String, String> tag = clientSpan.tags().entrySet().iterator().next();
+    assertGetTracesReturns(
       requestBuilder()
-        .serviceName("frontend")
+        .serviceName(clientSpan.localServiceName())
         .parseAnnotationQuery(tag.getKey() + "=" + tag.getValue())
-        .build()
-    ).execute()).isNotEmpty();
+        .build(),
+      asList(clientSpan));
   }
 
-  @Test protected void getTraces_multipleAnnotationsBecomeAndFilter() throws IOException {
-    Span foo = Span.newBuilder().traceId("1").name("call1").id(1)
+  @Test
+  protected void getTraces_multipleAnnotationsBecomeAndFilter(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Endpoint frontend = suffixServiceName(TestObjects.FRONTEND, testSuffix);
+
+    Span foo = Span.newBuilder().traceId(newTraceId()).name("call1").id(1)
       .timestamp((TODAY + 1) * 1000L)
-      .localEndpoint(FRONTEND)
+      .localEndpoint(frontend)
       .addAnnotation((TODAY + 1) * 1000L, "foo").build();
     // would be foo bar, except lexicographically bar precedes foo
-    Span barAndFoo = Span.newBuilder().traceId("2").name("call2").id(2)
+    Span barAndFoo = Span.newBuilder().traceId(newTraceId()).name("call2").id(2)
       .timestamp((TODAY + 2) * 1000L)
-      .localEndpoint(FRONTEND)
+      .localEndpoint(frontend)
       .addAnnotation((TODAY + 2) * 1000L, "bar")
       .addAnnotation((TODAY + 2) * 1000L, "foo").build();
-    Span fooAndBazAndQux = Span.newBuilder().traceId("3").name("call3").id(3)
+    Span fooAndBazAndQux = Span.newBuilder().traceId(newTraceId()).name("call3").id(3)
       .timestamp((TODAY + 3) * 1000L)
-      .localEndpoint(FRONTEND)
+      .localEndpoint(frontend)
       .addAnnotation((TODAY + 3) * 1000L, "foo")
       .putTag("baz", "qux")
       .build();
-    Span barAndFooAndBazAndQux = Span.newBuilder().traceId("4").name("call4").id(4)
+    Span barAndFooAndBazAndQux = Span.newBuilder().traceId(newTraceId()).name("call4").id(4)
       .timestamp((TODAY + 4) * 1000L)
-      .localEndpoint(FRONTEND)
+      .localEndpoint(frontend)
       .addAnnotation((TODAY + 4) * 1000L, "bar")
       .addAnnotation((TODAY + 4) * 1000L, "foo")
       .putTag("baz", "qux")
@@ -599,285 +603,272 @@ public abstract class ITSpanStore<T extends StorageComponent> extends ITStorage<
 
     accept(foo, barAndFoo, fooAndBazAndQux, barAndFooAndBazAndQux);
 
-    assertThat(sortTraces(store().getTraces(
-      requestBuilder().serviceName("frontend").parseAnnotationQuery("foo").build()
-    ).execute())).containsExactly(
+    assertGetTracesReturns(
+      requestBuilder().serviceName(frontend.serviceName()).parseAnnotationQuery("foo").build(),
       asList(foo), asList(barAndFoo), asList(fooAndBazAndQux), asList(barAndFooAndBazAndQux)
     );
 
-    assertThat(sortTraces(store().getTraces(
-      requestBuilder().serviceName("frontend").parseAnnotationQuery("foo and bar").build()
-    ).execute())).containsExactly(
+    assertGetTracesReturns(
+      requestBuilder().serviceName(frontend.serviceName())
+        .parseAnnotationQuery("foo and bar")
+        .build(),
       asList(barAndFoo), asList(barAndFooAndBazAndQux)
     );
 
-    assertThat(sortTraces(store().getTraces(
-      requestBuilder().serviceName("frontend")
+    assertGetTracesReturns(
+      requestBuilder().serviceName(frontend.serviceName())
         .parseAnnotationQuery("foo and bar and baz=qux")
-        .build()
-    ).execute())).containsExactly(
-      asList(barAndFooAndBazAndQux)
-    );
+        .build(),
+      asList(barAndFooAndBazAndQux));
 
     // ensure we can search only by tag key
-    assertThat(sortTraces(store().getTraces(
-      requestBuilder().serviceName("frontend").parseAnnotationQuery("baz").build()
-    ).execute())).containsExactly(
+    assertGetTracesReturns(
+      requestBuilder().serviceName(frontend.serviceName()).parseAnnotationQuery("baz").build(),
       asList(fooAndBazAndQux), asList(barAndFooAndBazAndQux)
     );
   }
 
   /** This test makes sure that annotation queries pay attention to which host recorded data */
-  @Test protected void getTraces_differentiateOnServiceName() throws IOException {
-    Span trace1 = Span.newBuilder().traceId("1").name("1").id(1)
-      .kind(Span.Kind.CLIENT)
+  @Test protected void getTraces_differentiateOnServiceName(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Endpoint frontend = suffixServiceName(TestObjects.FRONTEND, testSuffix);
+    Endpoint backend = suffixServiceName(TestObjects.BACKEND, testSuffix);
+
+    Span trace1 = Span.newBuilder().traceId(newTraceId()).name("1").id(1)
+      .kind(CLIENT)
       .timestamp((TODAY + 1) * 1000L)
       .duration(3000L)
-      .localEndpoint(FRONTEND)
+      .localEndpoint(frontend)
       .addAnnotation(((TODAY + 1) * 1000L) + 500, "web")
       .putTag("local", "web")
       .putTag("web-b", "web")
       .build();
 
-    Span trace1Server = Span.newBuilder().traceId("1").name("1").id(1)
+    Span trace1Server = Span.newBuilder().traceId(trace1.traceId()).name("1").id(1)
       .kind(Span.Kind.SERVER)
       .shared(true)
-      .localEndpoint(BACKEND)
+      .localEndpoint(backend)
       .timestamp((TODAY + 2) * 1000L)
       .duration(1000L)
       .build();
 
-    Span trace2 = Span.newBuilder().traceId("2").name("2").id(2)
+    Span trace2 = Span.newBuilder().traceId(newTraceId()).name("2").id(2)
       .timestamp((TODAY + 11) * 1000L)
       .duration(3000L)
-      .kind(Span.Kind.CLIENT)
-      .localEndpoint(BACKEND)
+      .kind(CLIENT)
+      .localEndpoint(backend)
       .addAnnotation(((TODAY + 11) * 1000) + 500, "app")
       .putTag("local", "app")
       .putTag("app-b", "app")
       .build();
 
-    Span trace2Server = Span.newBuilder().traceId("2").name("2").id(2)
+    Span trace2Server = Span.newBuilder().traceId(trace2.traceId()).name("2").id(2)
       .shared(true)
       .kind(Span.Kind.SERVER)
-      .localEndpoint(FRONTEND)
+      .localEndpoint(frontend)
       .timestamp((TODAY + 12) * 1000L)
       .duration(1000L).build();
 
     accept(trace1, trace1Server, trace2, trace2Server);
 
     // Sanity check
-    assertThat(traces().getTrace(trace1.traceId()).execute())
-      .containsExactlyInAnyOrder(trace1, trace1Server);
-    assertThat(sortTrace(traces().getTrace(trace2.traceId()).execute()))
-      .containsExactly(trace2, trace2Server);
-    assertThat(sortTraces(store().getTraces(requestBuilder().build()).execute()))
-      .containsExactly(asList(trace1, trace1Server), asList(trace2, trace2Server));
+    assertGetTraceReturns(trace1.traceId(), asList(trace1, trace1Server));
+    assertGetTraceReturns(trace2.traceId(), asList(trace2, trace2Server));
+    assertGetTracesReturns(requestBuilder().build(),
+      asList(trace1, trace1Server), asList(trace2, trace2Server));
 
     // We only return traces where the service specified caused the data queried.
-    assertThat(sortTraces(store().getTraces(
-      requestBuilder().serviceName("frontend").parseAnnotationQuery("web").build()
-    ).execute())).containsExactly(asList(trace1, trace1Server));
+    assertGetTracesReturns(
+      requestBuilder().serviceName(frontend.serviceName()).parseAnnotationQuery("web").build(),
+      asList(trace1, trace1Server));
 
-    assertThat(store().getTraces(
-      requestBuilder().serviceName("backend").parseAnnotationQuery("web").build()
-    ).execute()).isEmpty();
+    assertGetTracesReturnsEmpty(
+      requestBuilder().serviceName(backend.serviceName()).parseAnnotationQuery("web").build());
 
-    assertThat(sortTraces(store().getTraces(
-      requestBuilder().serviceName("backend").parseAnnotationQuery("app").build()
-    ).execute())).containsExactly(asList(trace2, trace2Server));
+    assertGetTracesReturns(
+      requestBuilder().serviceName(backend.serviceName()).parseAnnotationQuery("app").build(),
+      asList(trace2, trace2Server));
 
-    assertThat(store().getTraces(
-      requestBuilder().serviceName("frontend").parseAnnotationQuery("app").build()
-    ).execute()).isEmpty();
+    assertGetTracesReturnsEmpty(
+      requestBuilder().serviceName(frontend.serviceName()).parseAnnotationQuery("app").build());
 
     // tags are returned on annotation queries
-    assertThat(sortTraces(store().getTraces(
-      requestBuilder().serviceName("frontend").parseAnnotationQuery("web-b").build()
-    ).execute())).containsExactly(asList(trace1, trace1Server));
+    assertGetTracesReturns(
+      requestBuilder().serviceName(frontend.serviceName()).parseAnnotationQuery("web-b").build(),
+      asList(trace1, trace1Server));
 
-    assertThat(store().getTraces(
-      requestBuilder().serviceName("backend").parseAnnotationQuery("web-b").build()
-    ).execute()).isEmpty();
+    assertGetTracesReturnsEmpty(
+      requestBuilder().serviceName(backend.serviceName()).parseAnnotationQuery("web-b").build());
 
-    assertThat(sortTraces(store().getTraces(
-      requestBuilder().serviceName("backend").parseAnnotationQuery("app-b").build()
-    ).execute())).containsExactly(asList(trace2, trace2Server));
+    assertGetTracesReturns(
+      requestBuilder().serviceName(backend.serviceName()).parseAnnotationQuery("app-b").build(),
+      asList(trace2, trace2Server));
 
-    assertThat(store().getTraces(
-      requestBuilder().serviceName("frontend").parseAnnotationQuery("app-b").build()
-    ).execute()).isEmpty();
+    assertGetTracesReturnsEmpty(
+      requestBuilder().serviceName(frontend.serviceName()).parseAnnotationQuery("app-b").build());
 
     // We only return traces where the service specified caused the tag queried.
-    assertThat(sortTraces(store().getTraces(
-      requestBuilder().serviceName("frontend").parseAnnotationQuery("local=web").build()
-    ).execute())).containsExactly(asList(trace1, trace1Server));
+    assertGetTracesReturns(
+      requestBuilder().serviceName(frontend.serviceName())
+        .parseAnnotationQuery("local=web")
+        .build(),
+      asList(trace1, trace1Server));
 
-    assertThat(store().getTraces(
-      requestBuilder().serviceName("backend").parseAnnotationQuery("local=web").build()
-    ).execute()).isEmpty();
+    assertGetTracesReturnsEmpty(
+      requestBuilder().serviceName(backend.serviceName())
+        .parseAnnotationQuery("local=web")
+        .build());
 
-    assertThat(sortTraces(store().getTraces(
-      requestBuilder().serviceName("backend").parseAnnotationQuery("local=app").build()
-    ).execute())).containsExactly(asList(trace2, trace2Server));
+    assertGetTracesReturns(
+      requestBuilder().serviceName(backend.serviceName()).parseAnnotationQuery("local=app").build(),
+      asList(trace2, trace2Server));
 
-    assertThat(store().getTraces(
-      requestBuilder().serviceName("frontend").parseAnnotationQuery("local=app").build()
-    ).execute()).isEmpty();
+    assertGetTracesReturnsEmpty(
+      requestBuilder().serviceName(frontend.serviceName())
+        .parseAnnotationQuery("local=app")
+        .build());
   }
 
   /** limit should apply to traces closest to endTs */
-  @Test protected void getTraces_limit() throws IOException {
-    Span span1 = Span.newBuilder()
-      .traceId("a")
-      .id("1")
-      .timestamp((TODAY + 1) * 1000L)
-      .localEndpoint(FRONTEND)
-      .build();
-    Span span2 = span1.toBuilder().traceId("b").timestamp((TODAY + 2) * 1000L).build();
+  @Test protected void getTraces_limit(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span span1 = spanBuilder(testSuffix).build();
+    Span span2 = span1.toBuilder().traceId(newTraceId()).timestamp((TODAY + 2) * 1000L).build();
     accept(span1, span2);
 
-    assertThat(
-      store().getTraces(requestBuilder().serviceName("frontend").limit(1).build()).execute())
-      .extracting(t -> t.get(0).id())
-      .containsExactly(span2.id());
+    assertGetTracesReturns(
+      requestBuilder().serviceName(span1.localServiceName()).limit(1).build(),
+      asList(span2));
   }
 
   /** Traces whose root span has timestamps between (endTs - lookback) and endTs are returned */
-  @Test protected void getTraces_endTsAndLookback() throws IOException {
-    Span span1 = Span.newBuilder()
-      .traceId("a")
-      .id("1")
-      .timestamp((TODAY + 1) * 1000L)
-      .localEndpoint(FRONTEND)
-      .build();
-    Span span2 = span1.toBuilder().traceId("b").timestamp((TODAY + 2) * 1000L).build();
+  @Test protected void getTraces_endTsAndLookback(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span span1 = spanBuilder(testSuffix).timestamp((TODAY + 1) * 1000L).build();
+    Span span2 = span1.toBuilder().traceId(newTraceId()).timestamp((TODAY + 2) * 1000L).build();
     accept(span1, span2);
 
-    assertThat(store().getTraces(requestBuilder().endTs(TODAY).build()).execute())
-      .isEmpty();
-    assertThat(store().getTraces(requestBuilder().endTs(TODAY + 1).build()).execute())
-      .extracting(t -> t.get(0).id())
-      .containsExactly(span1.id());
-    assertThat(store().getTraces(requestBuilder().endTs(TODAY + 2).build()).execute())
-      .extracting(t -> t.get(0).id())
-      .containsExactlyInAnyOrder(span1.id(), span2.id());
-    assertThat(store().getTraces(requestBuilder().endTs(TODAY + 3).build()).execute())
-      .extracting(t -> t.get(0).id())
-      .containsExactlyInAnyOrder(span1.id(), span2.id());
+    assertGetTracesReturnsEmpty(
+      requestBuilder().endTs(TODAY).build());
 
-    assertThat(store().getTraces(requestBuilder().endTs(TODAY).build()).execute())
-      .isEmpty();
-    assertThat(store().getTraces(requestBuilder().endTs(TODAY + 1).lookback(1).build()).execute())
-      .extracting(t -> t.get(0).id())
-      .containsExactly(span1.id());
-    assertThat(store().getTraces(requestBuilder().endTs(TODAY + 2).lookback(1).build()).execute())
-      .extracting(t -> t.get(0).id())
-      .containsExactlyInAnyOrder(span1.id(), span2.id());
-    assertThat(store().getTraces(requestBuilder().endTs(TODAY + 3).lookback(1).build()).execute())
-      .extracting(t -> t.get(0).id())
-      .containsExactlyInAnyOrder(span2.id());
+    assertGetTracesReturns(
+      requestBuilder().endTs(TODAY + 1).build(),
+      asList(span1));
+
+    assertGetTracesReturns(
+      requestBuilder().endTs(TODAY + 2).build(),
+      asList(span1), asList(span2));
+
+    assertGetTracesReturns(
+      requestBuilder().endTs(TODAY + 3).build(),
+      asList(span1), asList(span2));
+
+    assertGetTracesReturnsEmpty(
+      requestBuilder().endTs(TODAY).build());
+
+    assertGetTracesReturns(
+      requestBuilder().endTs(TODAY + 1).lookback(1).build(),
+      asList(span1));
+
+    assertGetTracesReturns(
+      requestBuilder().endTs(TODAY + 2).lookback(1).build(),
+      asList(span1), asList(span2));
+
+    assertGetTracesReturns(
+      requestBuilder().endTs(TODAY + 3).lookback(1).build(),
+      asList(span2));
   }
 
-  // Bugs have happened in the past where trace limit was mistaken for span count.
-  @Test protected void traceWithManySpans() throws IOException {
-    Span[] trace = new Span[101];
-    trace[0] = Span.newBuilder().traceId("f66529c8cc356aa0").id("93288b4644570496").name("get")
-      .timestamp(TODAY * 1000).duration(350 * 1000L)
-      .kind(Span.Kind.SERVER)
-      .localEndpoint(BACKEND)
-      .build();
+  @Test protected void names_goLowercase(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span clientSpan = newClientSpan(testSuffix);
 
-    IntStream.range(1, trace.length).forEach(i ->
-      trace[i] = Span.newBuilder().traceId(trace[0].traceId()).parentId(trace[0].id()).id(i)
-        .name("foo")
-        .timestamp((TODAY + i) * 1000).duration(10L)
-        .localEndpoint(BACKEND)
-        .build());
+    accept(clientSpan);
 
-    accept(trace);
+    assertGetTracesReturns(
+      requestBuilder()
+        .serviceName(clientSpan.localServiceName())
+        .remoteServiceName(clientSpan.remoteServiceName().toUpperCase(Locale.ROOT))
+        .build(),
+      asList(clientSpan));
 
-    assertThat(store().getTraces(requestBuilder().build()).execute())
-      .flatExtracting(t -> t)
-      .containsExactlyInAnyOrder(trace);
-    assertThat(traces().getTrace(trace[0].traceId()).execute())
-      .containsExactlyInAnyOrder(trace);
-  }
+    assertGetTracesReturns(
+      requestBuilder()
+        .serviceName(clientSpan.localServiceName())
+        .spanName(clientSpan.name().toUpperCase(Locale.ROOT)).build(),
+      asList(clientSpan));
 
-  @Test protected void names_goLowercase() throws IOException {
-    accept(CLIENT_SPAN);
-
-    assertThat(store().getTraces(
-      requestBuilder().serviceName("frontend").remoteServiceName("BaCkEnD").build()
-    ).execute()).hasSize(1);
-
-    assertThat(store().getTraces(
-      requestBuilder().serviceName("frontend").spanName("GeT").build()
-    ).execute()).hasSize(1);
-
-    assertThat(store().getTraces(requestBuilder().serviceName("FrOnTeNd").build()).execute())
-      .hasSize(1);
+    assertGetTracesReturns(
+      requestBuilder()
+        .serviceName(clientSpan.localServiceName())
+        .remoteServiceName(clientSpan.remoteServiceName().toUpperCase(Locale.ROOT))
+        .build(),
+      asList(clientSpan));
   }
 
   /** Ensure complete traces are aggregated, even if they complete after endTs */
-  @Test protected void getTraces_endTsInsideTheTrace() throws IOException {
-    accept(TRACE);
+  @Test protected void getTraces_endTsInsideTheTrace(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    List<Span> trace = newTrace(testSuffix);
 
-    assertThat(sortTraces(store().getTraces(
-      requestBuilder().endTs(TRACE_STARTTS + 100).lookback(200).build()
-    ).execute())).containsOnly(TRACE);
+    accept(trace);
+
+    //  - Note: Using the smallest lookback avoids bumping into implementation around windowing.
+    long lookback = trace.get(0).durationAsLong() / 1000L;
+    assertGetTracesReturns(
+      requestBuilder().endTs(endTs(trace)).lookback(lookback).build(),
+      trace);
   }
 
-  void setupDurationData() throws IOException {
-    Endpoint service1 = Endpoint.newBuilder().serviceName("service1").build();
-    Endpoint service2 = Endpoint.newBuilder().serviceName("service2").build();
-    Endpoint service3 = Endpoint.newBuilder().serviceName("service3").build();
+  List<List<Span>> setupDurationData(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Endpoint frontend = suffixServiceName(TestObjects.FRONTEND, testSuffix);
+    Endpoint backend = suffixServiceName(TestObjects.BACKEND, testSuffix);
+    Endpoint db = suffixServiceName(TestObjects.DB, testSuffix);
 
+    String traceId1 = newTraceId(), traceId2 = newTraceId(), traceId3 = newTraceId();
     long offsetMicros = (TODAY - 3) * 1000L; // to make sure queries look back properly
-    Span targz = Span.newBuilder().traceId("1").id(1L)
+    Span targz = Span.newBuilder().traceId(traceId1).id(1L)
       .name("targz").timestamp(offsetMicros + 100L).duration(200_000L)
-      .localEndpoint(service1)
-      .remoteEndpoint(service3)
+      .localEndpoint(frontend)
+      .remoteEndpoint(db)
       .putTag("lc", "archiver").build();
-    Span tar = Span.newBuilder().traceId("1").id(2L).parentId(1L)
+    Span tar = Span.newBuilder().traceId(traceId1).id(2L).parentId(1L)
       .name("tar").timestamp(offsetMicros + 200L).duration(150_000L)
-      .localEndpoint(service2)
-      .remoteEndpoint(service2)
+      .localEndpoint(backend)
+      .remoteEndpoint(backend)
       .putTag("lc", "archiver").build();
-    Span gz = Span.newBuilder().traceId("1").id(3L).parentId(1L)
+    Span gz = Span.newBuilder().traceId(traceId1).id(3L).parentId(1L)
       .name("gz").timestamp(offsetMicros + 250L).duration(50_000L)
-      .localEndpoint(service3)
-      .remoteEndpoint(service1)
+      .localEndpoint(db)
+      .remoteEndpoint(frontend)
       .putTag("lc", "archiver").build();
-    Span zip = Span.newBuilder().traceId("3").id(3L)
+    Span zip = Span.newBuilder().traceId(traceId3).id(3L)
       .name("zip").timestamp(offsetMicros + 130L).duration(50_000L)
       .addAnnotation(offsetMicros + 130L, "zip")
-      .localEndpoint(service2)
-      .remoteEndpoint(service2)
+      .localEndpoint(backend)
+      .remoteEndpoint(backend)
       .putTag("lc", "archiver").build();
 
     List<Span> trace1 = asList(targz, tar, gz);
     List<Span> trace2 = asList(
-      targz.toBuilder().traceId("2").timestamp(offsetMicros + 110L)
-        .localEndpoint(service3)
-        .remoteEndpoint(service1)
+      targz.toBuilder().traceId(traceId2).timestamp(offsetMicros + 110L)
+        .localEndpoint(db)
+        .remoteEndpoint(frontend)
         .putTag("lc", "archiver-v2").build(),
-      tar.toBuilder().traceId("2").timestamp(offsetMicros + 210L)
-        .localEndpoint(service2)
-        .remoteEndpoint(service2)
+      tar.toBuilder().traceId(traceId2).timestamp(offsetMicros + 210L)
+        .localEndpoint(backend)
+        .remoteEndpoint(backend)
         .putTag("lc", "archiver").build(),
-      gz.toBuilder().traceId("2").timestamp(offsetMicros + 260L)
-        .localEndpoint(service1)
-        .remoteEndpoint(service2)
+      gz.toBuilder().traceId(traceId2).timestamp(offsetMicros + 260L)
+        .localEndpoint(frontend)
+        .remoteEndpoint(backend)
         .putTag("lc", "archiver").build());
     List<Span> trace3 = asList(zip);
 
-    accept(trace1.toArray(new Span[0]));
-    accept(trace2.toArray(new Span[0]));
-    accept(trace3.toArray(new Span[0]));
-  }
-
-  protected static QueryRequest.Builder requestBuilder() {
-    return QueryRequest.newBuilder().endTs(TODAY + DAY).lookback(DAY * 2).limit(100);
+    accept(trace1);
+    accept(trace2);
+    accept(trace3);
+    return asList(trace1, trace2, trace3);
   }
 }

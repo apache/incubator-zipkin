@@ -86,7 +86,7 @@ public class InMemoryStorageTest {
     storage.accept(asList(CLIENT_SPAN)).execute();
     storage.accept(asList(CLIENT_SPAN.toBuilder().traceId("333").build())).execute();
 
-    assertThat(storage).extracting("spansByTraceIdTimeStamp.delegate")
+    assertThat(storage).extracting("spansByTraceIdTimestamp.delegate")
       .satisfies(map -> assertThat((Map) map).hasSize(2));
   }
 

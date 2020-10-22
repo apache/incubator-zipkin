@@ -13,27 +13,40 @@
  */
 package zipkin2.storage.cassandra.v1;
 
-import com.datastax.driver.core.BoundStatement;
-import com.datastax.driver.core.PreparedStatement;
-import com.datastax.driver.core.ResultSet;
-import com.datastax.driver.core.ResultSetFuture;
-import com.datastax.driver.core.Session;
-import com.datastax.driver.core.querybuilder.Insert;
-import com.datastax.driver.core.querybuilder.QueryBuilder;
+import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.cql.AsyncResultSet;
+import com.datastax.oss.driver.api.core.cql.BoundStatementBuilder;
+import com.datastax.oss.driver.api.core.cql.PreparedStatement;
 import com.google.auto.value.AutoValue;
-import java.util.concurrent.TimeUnit;
+import java.util.List;
+import java.util.concurrent.CompletionStage;
+import java.util.stream.IntStream;
+import zipkin2.internal.DelayLimiter;
 import zipkin2.storage.QueryRequest;
-import zipkin2.storage.cassandra.internal.call.DeduplicatingVoidCallFactory;
-import zipkin2.storage.cassandra.internal.call.ResultSetFutureCall;
+import zipkin2.storage.cassandra.internal.call.DeduplicatingInsert;
+
+import static java.util.concurrent.TimeUnit.SECONDS;
+import static java.util.stream.Collectors.toList;
 
 /**
  * Inserts index rows into a Cassandra table. This skips entries that don't improve results based on
  * {@link QueryRequest#endTs()} and {@link QueryRequest#lookback()}. For example, it doesn't insert
  * rows that only vary on timestamp and exist between timestamps of existing rows.
  */
-final class IndexTraceId extends ResultSetFutureCall<Void> {
-  @AutoValue
-  abstract static class Input {
+final class IndexTraceId extends DeduplicatingInsert<IndexTraceId.Input> {
+  /**
+   * Used to avoid hot spots when writing indexes used to query by service name or annotation.
+   *
+   * <p>This controls the amount of buckets, or partitions writes to {@code service_name_index}
+   * and {@code annotations_index}. This must be the same for all query servers, and has
+   * historically always been 10.
+   *
+   * <p>See https://github.com/openzipkin/zipkin/issues/623 for further explanation
+   */
+  static final int BUCKET_COUNT = 10;
+  static final List<Integer> BUCKETS = IntStream.range(0, BUCKET_COUNT).boxed().collect(toList());
+
+  @AutoValue abstract static class Input {
     static Input create(String partitionKey, long timestamp, long traceId) {
       return new AutoValue_IndexTraceId_Input(partitionKey, timestamp, traceId);
     }
@@ -45,34 +58,24 @@ final class IndexTraceId extends ResultSetFutureCall<Void> {
     abstract long trace_id(); // clustering key
   }
 
-  static abstract class Factory extends DeduplicatingVoidCallFactory<Input> {
-    final Session session;
+  static abstract class Factory extends DeduplicatingInsert.Factory<Input> {
+    final CqlSession session;
     final TraceIdIndexer.Factory indexerFactory;
-    final int bucketCount;
     final PreparedStatement preparedStatement;
-    final TimestampCodec timestampCodec;
 
-    Factory(CassandraStorage storage, String table, int indexTtl) {
-      super(TimeUnit.SECONDS.toMillis(storage.indexCacheTtl), storage.indexCacheMax);
+    Factory(String statement, CassandraStorage storage, int indexTtl) {
+      super(SECONDS.toMillis(storage.indexCacheTtl), storage.indexCacheMax);
       session = storage.session();
-      indexerFactory =
-        new TraceIdIndexer.Factory(table, TimeUnit.SECONDS.toNanos(storage.indexCacheTtl),
-          storage.indexCacheMax);
-      bucketCount = storage.bucketCount;
-      Insert insertQuery = declarePartitionKey(QueryBuilder.insertInto(table)
-        .value("ts", QueryBuilder.bindMarker("ts"))
-        .value("trace_id", QueryBuilder.bindMarker("trace_id")));
-      if (indexTtl > 0) insertQuery.using(QueryBuilder.ttl(indexTtl));
-      preparedStatement = session.prepare(insertQuery);
-      timestampCodec = new TimestampCodec(session);
+      indexerFactory = new TraceIdIndexer.Factory(statement, SECONDS.toNanos(storage.indexCacheTtl),
+        storage.indexCacheMax);
+      this.preparedStatement = session.prepare(
+        indexTtl > 0 ? statement + " USING TTL " + indexTtl : statement);
     }
 
-    abstract Insert declarePartitionKey(Insert insert);
-
-    abstract BoundStatement bindPartitionKey(BoundStatement bound, String partitionKey);
+    abstract void bindPartitionKey(BoundStatementBuilder bound, String partitionKey);
 
     @Override protected IndexTraceId newCall(Input input) {
-      return new IndexTraceId(this, input);
+      return new IndexTraceId(this, delayLimiter, input);
     }
 
     TraceIdIndexer newIndexer() {
@@ -86,22 +89,18 @@ final class IndexTraceId extends ResultSetFutureCall<Void> {
   }
 
   final Factory factory;
-  final Input input;
 
-  IndexTraceId(Factory factory, Input input) {
+  IndexTraceId(Factory factory, DelayLimiter<Input> delayLimiter, Input input) {
+    super(delayLimiter, input);
     this.factory = factory;
-    this.input = input;
   }
 
-  @Override protected ResultSetFuture newFuture() {
-    return factory.session.executeAsync(factory.bindPartitionKey(
-      factory.preparedStatement.bind()
-        .setLong("trace_id", input.trace_id())
-        .setBytesUnsafe("ts", factory.timestampCodec.serialize(input.ts())), input.partitionKey()));
-  }
-
-  @Override public Void map(ResultSet input) {
-    return null;
+  @Override protected CompletionStage<AsyncResultSet> newCompletionStage() {
+    BoundStatementBuilder bound = factory.preparedStatement.boundStatementBuilder()
+      .setBytesUnsafe(0, TimestampCodec.serialize(input.ts()))
+      .setLong(1, input.trace_id());
+    factory.bindPartitionKey(bound, input.partitionKey());
+    return factory.session.executeAsync(bound.build());
   }
 
   @Override public String toString() {
@@ -109,6 +108,6 @@ final class IndexTraceId extends ResultSetFutureCall<Void> {
   }
 
   @Override public IndexTraceId clone() {
-    return new IndexTraceId(factory, input);
+    return new IndexTraceId(factory, delayLimiter, input);
   }
 }

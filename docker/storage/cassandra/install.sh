@@ -60,7 +60,6 @@ done
 echo "*** Importing Scheme"
 cat zipkin-schemas/cassandra-schema.cql | bin/cqlsh --debug localhost
 cat zipkin-schemas/zipkin2-schema.cql | bin/cqlsh --debug localhost
-cat zipkin-schemas/zipkin2-schema.cql | sed 's/ zipkin2/ zipkin2_udts/g' | bin/cqlsh --debug localhost
 cat zipkin-schemas/zipkin2-schema-indexes.cql | bin/cqlsh --debug localhost
 
 echo "*** Adding custom UDFs to zipkin2 keyspace"

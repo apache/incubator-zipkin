@@ -14,6 +14,7 @@
 package zipkin2.storage.mysql.v1;
 
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -30,6 +31,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import zipkin2.DependencyLink;
 import zipkin2.storage.StorageComponent;
 
+import static zipkin2.storage.ITDependencies.aggregateLinks;
 import static zipkin2.storage.mysql.v1.internal.generated.tables.ZipkinDependencies.ZIPKIN_DEPENDENCIES;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
@@ -44,8 +46,12 @@ class ITMySQLStorage {
       return backend.computeStorageBuilder();
     }
 
+    @Override protected boolean returnsRawSpans() {
+      return false;
+    }
+
     @Override @Test @Disabled("No consumer-side span deduplication")
-    public void getTrace_deduplicates() {
+    public void getTrace_deduplicates(TestInfo testInfo) {
     }
 
     @Override public void clear() {
@@ -59,6 +65,25 @@ class ITMySQLStorage {
       return backend.computeStorageBuilder();
     }
 
+    @Override protected boolean returnsRawSpans() {
+      return false;
+    }
+
+    @Override public void clear() {
+      storage.clear();
+    }
+  }
+
+  @Nested
+  class ITSpanStoreHeavy extends zipkin2.storage.ITSpanStoreHeavy<MySQLStorage> {
+    @Override protected StorageComponent.Builder newStorageBuilder(TestInfo testInfo) {
+      return backend.computeStorageBuilder();
+    }
+
+    @Override protected boolean returnsRawSpans() {
+      return false;
+    }
+
     @Override public void clear() {
       storage.clear();
     }
@@ -68,6 +93,10 @@ class ITMySQLStorage {
   class ITStrictTraceIdFalse extends zipkin2.storage.ITStrictTraceIdFalse<MySQLStorage> {
     @Override protected StorageComponent.Builder newStorageBuilder(TestInfo testInfo) {
       return backend.computeStorageBuilder();
+    }
+
+    @Override protected boolean returnsRawSpans() {
+      return false;
     }
 
     @Override public void clear() {
@@ -81,49 +110,12 @@ class ITMySQLStorage {
       return backend.computeStorageBuilder();
     }
 
-    @Override public void clear() {
-      storage.clear();
-    }
-  }
-
-  @Nested
-  class ITDependenciesPreAggregated extends zipkin2.storage.ITDependencies<MySQLStorage> {
-    @Override protected StorageComponent.Builder newStorageBuilder(TestInfo testInfo) {
-      return backend.computeStorageBuilder();
+    @Override protected boolean returnsRawSpans() {
+      return false;
     }
 
     @Override public void clear() {
       storage.clear();
-    }
-
-    /**
-     * The current implementation does not include dependency aggregation. It includes retrieval of
-     * pre-aggregated links, usually made via zipkin-dependencies
-     */
-    @Override protected void processDependencies(List<zipkin2.Span> spans) throws Exception {
-      try (Connection conn = storage.datasource.getConnection()) {
-        DSLContext context = storage.context.get(conn);
-
-        // batch insert the rows at timestamp midnight
-        List<Query> inserts = new ArrayList<>();
-        aggregateLinks(spans).forEach((midnight, links) -> {
-
-          LocalDate day = Instant.ofEpochMilli(midnight)
-            .atZone(ZoneId.of("UTC"))
-            .toLocalDate();
-
-          for (DependencyLink link : links) {
-            inserts.add(context.insertInto(ZIPKIN_DEPENDENCIES)
-              .set(ZIPKIN_DEPENDENCIES.DAY, day)
-              .set(ZIPKIN_DEPENDENCIES.PARENT, link.parent())
-              .set(ZIPKIN_DEPENDENCIES.CHILD, link.child())
-              .set(ZIPKIN_DEPENDENCIES.CALL_COUNT, link.callCount())
-              .set(ZIPKIN_DEPENDENCIES.ERROR_COUNT, link.errorCount())
-              .onDuplicateKeyIgnore());
-          }
-        });
-        context.batch(inserts).execute();
-      }
     }
   }
 
@@ -131,6 +123,10 @@ class ITMySQLStorage {
   class ITServiceAndSpanNames extends zipkin2.storage.ITServiceAndSpanNames<MySQLStorage> {
     @Override protected StorageComponent.Builder newStorageBuilder(TestInfo testInfo) {
       return backend.computeStorageBuilder();
+    }
+
+    @Override protected boolean returnsRawSpans() {
+      return false;
     }
 
     @Override public void clear() {
@@ -144,6 +140,10 @@ class ITMySQLStorage {
       return backend.computeStorageBuilder();
     }
 
+    @Override protected boolean returnsRawSpans() {
+      return false;
+    }
+
     @Override public void clear() {
       storage.clear();
     }
@@ -155,8 +155,100 @@ class ITMySQLStorage {
       return backend.computeStorageBuilder();
     }
 
+    @Override protected boolean returnsRawSpans() {
+      return false;
+    }
+
     @Override public void clear() {
       storage.clear();
+    }
+  }
+
+  @Nested
+  class ITDependenciesHeavyOnDemand extends zipkin2.storage.ITDependenciesHeavy<MySQLStorage> {
+    @Override protected StorageComponent.Builder newStorageBuilder(TestInfo testInfo) {
+      return backend.computeStorageBuilder();
+    }
+
+    @Override protected boolean returnsRawSpans() {
+      return false;
+    }
+
+    @Override public void clear() {
+      storage.clear();
+    }
+  }
+
+  @Nested
+  class ITDependenciesPreAggregated extends zipkin2.storage.ITDependencies<MySQLStorage> {
+    @Override protected StorageComponent.Builder newStorageBuilder(TestInfo testInfo) {
+      return backend.computeStorageBuilder();
+    }
+
+    @Override protected boolean returnsRawSpans() {
+      return false;
+    }
+
+    @Override public void clear() {
+      storage.clear();
+    }
+
+    /**
+     * The current implementation does not include dependency aggregation. It includes retrieval of
+     * pre-aggregated links, usually made via zipkin-dependencies
+     */
+    @Override protected void processDependencies(List<zipkin2.Span> spans) throws Exception {
+      aggregateDependencies(storage, spans);
+    }
+  }
+
+  @Nested
+  class ITDependenciesHeavyPreAggregated extends zipkin2.storage.ITDependenciesHeavy<MySQLStorage> {
+    @Override protected StorageComponent.Builder newStorageBuilder(TestInfo testInfo) {
+      return backend.computeStorageBuilder();
+    }
+
+    @Override protected boolean returnsRawSpans() {
+      return false;
+    }
+
+    @Override public void clear() {
+      storage.clear();
+    }
+
+    /**
+     * The current implementation does not include dependency aggregation. It includes retrieval of
+     * pre-aggregated links, usually made via zipkin-dependencies
+     */
+    @Override protected void processDependencies(List<zipkin2.Span> spans) throws Exception {
+      aggregateDependencies(storage, spans);
+    }
+  }
+
+  static void aggregateDependencies(MySQLStorage storage, List<zipkin2.Span> spans)
+    throws SQLException {
+    try (Connection conn = storage.datasource.getConnection()) {
+      DSLContext context = storage.context.get(conn);
+
+      // batch insert the rows at timestamp midnight
+      List<Query> inserts = new ArrayList<>();
+      aggregateLinks(spans).forEach((midnight, links) -> {
+
+        LocalDate day = Instant.ofEpochMilli(midnight)
+          .atZone(ZoneId.of("UTC"))
+          .toLocalDate();
+
+        for (DependencyLink link : links) {
+          inserts.add(context.insertInto(ZIPKIN_DEPENDENCIES)
+            .set(ZIPKIN_DEPENDENCIES.DAY, day)
+            .set(ZIPKIN_DEPENDENCIES.PARENT, link.parent())
+            .set(ZIPKIN_DEPENDENCIES.CHILD, link.child())
+            .set(ZIPKIN_DEPENDENCIES.CALL_COUNT, link.callCount())
+            .set(ZIPKIN_DEPENDENCIES.ERROR_COUNT, link.errorCount())
+            .onDuplicateKeyIgnore());
+        }
+      });
+      context.batch(inserts).execute();
     }
   }
 }

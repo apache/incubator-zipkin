@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,22 +13,18 @@
  */
 package zipkin2.storage.cassandra.v1;
 
-import com.datastax.driver.core.ProtocolVersion;
 import java.util.Collections;
 import java.util.List;
 import org.junit.Test;
-import org.mockito.Mockito;
 import zipkin2.Call;
 import zipkin2.Span;
 import zipkin2.storage.QueryRequest;
-import zipkin2.storage.cassandra.v1.SelectTraceIdTimestampFromServiceNames.Factory.FlatMapServiceNamesToInput;
+import zipkin2.storage.cassandra.v1.SelectTraceIdTimestampFromServiceNames.FlatMapServiceNamesToInput;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.spy;
 import static zipkin2.TestObjects.DAY;
 import static zipkin2.TestObjects.TODAY;
+import static zipkin2.storage.cassandra.v1.InternalForTests.mockSession;
 
 // TODO: tests use toString because the call composition chain is complex (includes flat mapping)
 // This could be made a little less complex if we scrub out map=>map to a list of transformations,
@@ -67,14 +63,14 @@ public class CassandraSpanStoreTest {
   @Test public void getTraces() {
     Call<List<List<Span>>> call = spanStore.getTraces(queryBuilder.serviceName("frontend").build());
 
-    assertThat(call.toString()).contains("service_name=frontend,");
+    assertThat(call.toString()).contains("service_name=frontend");
   }
 
   @Test public void getTraces_withSpanName() {
     Call<List<List<Span>>> call = spanStore.getTraces(
       queryBuilder.serviceName("frontend").spanName("get").build());
 
-    assertThat(call.toString()).contains("service_span_name=frontend.get,");
+    assertThat(call.toString()).contains("service_span_name=frontend.get");
   }
 
   @Test public void getTraces_withRemoteServiceName() {
@@ -82,8 +78,8 @@ public class CassandraSpanStoreTest {
       queryBuilder.serviceName("frontend").remoteServiceName("backend").build());
 
     assertThat(call.toString())
-      .contains("service_remote_service_name=frontend.backend,")
-      .doesNotContain("service=frontend, span="); // no need to look at two indexes
+      .contains("service_remote_service_name=frontend.backend")
+      .doesNotContain("service=frontend"); // no need to look at two indexes
   }
 
   @Test public void getTraces_withSpanNameAndRemoteServiceName() {
@@ -91,8 +87,8 @@ public class CassandraSpanStoreTest {
       queryBuilder.serviceName("frontend").remoteServiceName("backend").spanName("get").build());
 
     assertThat(call.toString()) // needs to look at two indexes
-      .contains("service_remote_service_name=frontend.backend,")
-      .contains("service_span_name=frontend.get,");
+      .contains("service_remote_service_name=frontend.backend")
+      .contains("service_span_name=frontend.get");
   }
 
   @Test public void searchDisabled_doesntMakeRemoteQueryRequests() {
@@ -105,10 +101,6 @@ public class CassandraSpanStoreTest {
   }
 
   static CassandraSpanStore spanStore(CassandraStorage.Builder builder) {
-    CassandraStorage storage =
-      spy(builder.sessionFactory(mock(SessionFactory.class, Mockito.RETURNS_MOCKS)).build());
-    doReturn(new Schema.Metadata(ProtocolVersion.V4, "", true, true, true))
-      .when(storage).metadata();
-    return new CassandraSpanStore(storage);
+    return new CassandraSpanStore(builder.sessionFactory(storage -> mockSession()).build());
   }
 }

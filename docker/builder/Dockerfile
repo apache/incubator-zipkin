@@ -12,14 +12,21 @@
 # the License.
 #
 
-ARG java_version=15.0.0-15.27.17
+ARG java_version
+
+# We copy files from the context into a scratch container first to avoid a problem where docker and
+# docker-compose don't share layer hashes https://github.com/docker/compose/issues/883 normally.
+# COPY --from= works around the issue.
+FROM scratch as scratch
+
+COPY . /code/
 
 FROM openzipkin/java:${java_version} as built
 
-WORKDIR /code
-
 # Copy Maven source tree into the Docker context
-COPY . .
+COPY --from=scratch /code /code
+
+WORKDIR /code
 
 # Use the same command as we suggest in zipkin-server/README.md to hydrate the Maven and NPM cache
 #  * Uses mvn not ./mvnw to reduce layer size: we control the Maven version independently in Docker

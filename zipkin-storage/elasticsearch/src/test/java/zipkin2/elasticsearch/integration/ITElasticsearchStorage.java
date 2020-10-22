@@ -32,6 +32,7 @@ import zipkin2.elasticsearch.InternalForTests;
 import zipkin2.storage.StorageComponent;
 
 import static zipkin2.elasticsearch.integration.ElasticsearchStorageExtension.index;
+import static zipkin2.storage.ITDependencies.aggregateLinks;
 
 abstract class ITElasticsearchStorage {
 
@@ -52,6 +53,17 @@ abstract class ITElasticsearchStorage {
 
   @Nested
   class ITSpanStore extends zipkin2.storage.ITSpanStore<ElasticsearchStorage> {
+    @Override protected StorageComponent.Builder newStorageBuilder(TestInfo testInfo) {
+      return backend().computeStorageBuilder().index(index(testInfo));
+    }
+
+    @Override public void clear() throws IOException {
+      storage.clear();
+    }
+  }
+
+  @Nested
+  class ITSpanStoreHeavy extends zipkin2.storage.ITSpanStoreHeavy<ElasticsearchStorage> {
     @Override protected StorageComponent.Builder newStorageBuilder(TestInfo testInfo) {
       return backend().computeStorageBuilder().index(index(testInfo));
     }
@@ -111,14 +123,8 @@ abstract class ITElasticsearchStorage {
       return backend().computeStorageBuilder().index(index(testInfo));
     }
 
-    /**
-     * The current implementation does not include dependency aggregation. It includes retrieval of
-     * pre-aggregated links, usually made via zipkin-dependencies
-     */
     @Override protected void processDependencies(List<Span> spans) {
-      aggregateLinks(spans).forEach(
-        (midnight, links) -> InternalForTests.writeDependencyLinks(
-          storage, links, midnight));
+      aggregateDependencies(storage, spans);
     }
 
     @Override public void clear() throws IOException {
@@ -126,8 +132,32 @@ abstract class ITElasticsearchStorage {
     }
   }
 
-  @Test
-  void testUsageOfDeprecatedFeatures() {
+  @Nested
+  class ITDependenciesHeavy extends zipkin2.storage.ITDependenciesHeavy<ElasticsearchStorage> {
+    @Override protected StorageComponent.Builder newStorageBuilder(TestInfo testInfo) {
+      return backend().computeStorageBuilder().index(index(testInfo));
+    }
+
+    @Override protected void processDependencies(List<Span> spans) {
+      aggregateDependencies(storage, spans);
+    }
+
+    @Override public void clear() throws IOException {
+      storage.clear();
+    }
+  }
+
+  /**
+   * The current implementation does not include dependency aggregation. It includes retrieval of
+   * pre-aggregated links, usually made via zipkin-dependencies
+   */
+  static void aggregateDependencies(ElasticsearchStorage storage, List<Span> spans) {
+    aggregateLinks(spans).forEach(
+      (midnight, links) -> InternalForTests.writeDependencyLinks(
+        storage, links, midnight));
+  }
+
+  @Test void testUsageOfDeprecatedFeatures() {
     WebClient webClient = WebClient.builder(backend().baseUrl()).factory(ClientFactory.builder()
       .useHttp2Preface(false).build()).build();
     final AggregatedHttpResponse response =

@@ -13,19 +13,20 @@
  */
 package zipkin2.storage;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
+import java.util.concurrent.ThreadLocalRandom;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 import org.junit.jupiter.api.TestInstance;
 import zipkin2.Annotation;
 import zipkin2.DependencyLink;
 import zipkin2.Endpoint;
 import zipkin2.Span;
 import zipkin2.Span.Kind;
+import zipkin2.TestObjects;
 import zipkin2.internal.DependencyLinker;
 import zipkin2.v1.V1Span;
 import zipkin2.v1.V1SpanConverter;
@@ -33,17 +34,16 @@ import zipkin2.v1.V1SpanConverter;
 import static java.util.Arrays.asList;
 import static java.util.stream.Collectors.toList;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.failBecauseExceptionWasNotThrown;
-import static zipkin2.TestObjects.BACKEND;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static zipkin2.TestObjects.DAY;
-import static zipkin2.TestObjects.DB;
-import static zipkin2.TestObjects.FRONTEND;
 import static zipkin2.TestObjects.TODAY;
-import static zipkin2.TestObjects.TRACE;
-import static zipkin2.TestObjects.TRACE_DURATION;
-import static zipkin2.TestObjects.TRACE_ENDTS;
-import static zipkin2.TestObjects.TRACE_STARTTS;
+import static zipkin2.TestObjects.appendSuffix;
+import static zipkin2.TestObjects.endTs;
 import static zipkin2.TestObjects.midnightUTC;
+import static zipkin2.TestObjects.newTrace;
+import static zipkin2.TestObjects.newTraceId;
+import static zipkin2.TestObjects.startTs;
+import static zipkin2.TestObjects.suffixServiceName;
 
 /**
  * Base test for {@link SpanStore} implementations that support dependency aggregation. Subtypes
@@ -55,12 +55,6 @@ import static zipkin2.TestObjects.midnightUTC;
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public abstract class ITDependencies<T extends StorageComponent> extends ITStorage<T> {
-  static final Endpoint KAFKA = Endpoint.newBuilder().serviceName("kafka").build();
-  static final List<DependencyLink> LINKS = asList(
-    DependencyLink.newBuilder().parent("frontend").child("backend").callCount(1L).build(),
-    DependencyLink.newBuilder().parent("backend").child("db").callCount(1L).errorCount(1L).build()
-  );
-
   @Override protected final void configureStorageForTest(StorageComponent.Builder storage) {
     // Defaults are fine.
   }
@@ -70,18 +64,24 @@ public abstract class ITDependencies<T extends StorageComponent> extends ITStora
    * this method.
    */
   protected void processDependencies(List<Span> spans) throws Exception {
+    assertThat(spans).isNotEmpty(); // bug if it were!
+
     storage.spanConsumer().accept(spans).execute();
+    blockWhileInFlight();
   }
 
   /**
    * Normally, the root-span is where trace id == span id and parent id == null. The default is to
    * look back one day from today.
    */
-  @Test protected void getDependencies() throws Exception {
-    processDependencies(TRACE);
+  @Test protected void getDependencies(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    List<Span> trace = newTrace(testSuffix);
 
-    assertThat(store().getDependencies(TRACE_ENDTS, DAY).execute())
-      .containsExactlyInAnyOrderElementsOf(LINKS);
+    processDependencies(trace);
+
+    assertThat(store().getDependencies(endTs(trace), DAY).execute())
+      .containsExactlyInAnyOrderElementsOf(links(testSuffix));
   }
 
   /**
@@ -89,104 +89,107 @@ public abstract class ITDependencies<T extends StorageComponent> extends ITStora
    * for dependency links. This allows environments with 64-bit instrumentation to participate in
    * the same trace as 128-bit instrumentation.
    */
-  @Test protected void getDependencies_strictTraceId() throws Exception {
+  @Test protected void getDependencies_linksMixedTraceId(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    String traceId = newTraceId();
+
+    Endpoint frontend = suffixServiceName(TestObjects.FRONTEND, testSuffix);
+    Endpoint backend = suffixServiceName(TestObjects.BACKEND, testSuffix);
+
     List<Span> mixedTrace = asList(
-      Span.newBuilder().traceId("7180c278b62e8f6a216a2aea45d08fc9").id("1").name("get")
+      Span.newBuilder().traceId(traceId).id("1").name("get")
         .kind(Kind.SERVER)
         .timestamp(TODAY * 1000L)
         .duration(350 * 1000L)
-        .localEndpoint(FRONTEND)
+        .localEndpoint(frontend)
         .build(),
       // the server dropped traceIdHigh
-      Span.newBuilder().traceId("216a2aea45d08fc9").parentId("1").id("2").name("get")
+      Span.newBuilder().traceId(traceId.substring(16)).parentId("1").id("2").name("get")
         .kind(Kind.SERVER).shared(true)
         .timestamp((TODAY + 100) * 1000L)
         .duration(250 * 1000L)
-        .localEndpoint(BACKEND)
+        .localEndpoint(backend)
         .build(),
-      Span.newBuilder().traceId("7180c278b62e8f6a216a2aea45d08fc9").parentId("1").id("2")
+      Span.newBuilder().traceId(traceId).parentId("1").id("2")
         .kind(Kind.CLIENT)
         .timestamp((TODAY + 50) * 1000L)
         .duration(300 * 1000L)
-        .localEndpoint(FRONTEND)
+        .localEndpoint(frontend)
         .build()
     );
 
     processDependencies(mixedTrace);
 
-    assertThat(store().getDependencies(TRACE_ENDTS, DAY).execute()).containsOnly(
-      DependencyLink.newBuilder().parent("frontend").child("backend").callCount(1).build()
-    );
+    assertThat(store().getDependencies(endTs(mixedTrace), DAY).execute())
+      .containsOnly(DependencyLink.newBuilder()
+        .parent(frontend.serviceName())
+        .child(backend.serviceName())
+        .callCount(1).build()
+      );
   }
 
   /** It should be safe to run dependency link jobs twice */
-  @Test protected void replayOverwrites() throws Exception {
-    processDependencies(TRACE);
-    processDependencies(TRACE);
+  @Test protected void replayOverwrites(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    List<Span> trace = newTrace(testSuffix);
 
-    assertThat(store().getDependencies(TRACE_ENDTS, DAY).execute())
-      .containsExactlyInAnyOrderElementsOf(LINKS);
+    processDependencies(trace);
+    processDependencies(trace);
+
+    assertThat(store().getDependencies(endTs(trace), DAY).execute())
+      .containsExactlyInAnyOrderElementsOf(links(testSuffix));
   }
 
   /** Edge-case when there are no spans, or instrumentation isn't logging annotations properly. */
   @Test protected void empty() throws Exception {
-    assertThat(store().getDependencies(TRACE_ENDTS, DAY).execute())
+    assertThat(store().getDependencies(TODAY, DAY).execute())
       .isEmpty();
-  }
-
-  /**
-   * Trace id is not required to be a span id. For example, some instrumentation may create separate
-   * trace ids to help with collisions, or to encode information about the origin. This test makes
-   * sure we don't rely on the trace id = root span id convention.
-   */
-  @Test protected void traceIdIsOpaque() throws Exception {
-    List<Span> differentTraceId = TRACE.stream()
-      .map(s -> s.toBuilder().traceId("123").build())
-      .collect(toList());
-    processDependencies(differentTraceId);
-
-    assertThat(store().getDependencies(TRACE_ENDTS, DAY).execute())
-      .containsExactlyInAnyOrderElementsOf(LINKS);
   }
 
   /**
    * When all servers are instrumented, they all record {@link Kind#SERVER} and the {@link
    * Span#localEndpoint()} indicates the service.
    */
-  @Test protected void getDependenciesAllInstrumented() throws Exception {
-    Endpoint one = Endpoint.newBuilder().serviceName("trace-producer-one").ip("127.0.0.1").build();
+  @Test protected void getDependenciesAllInstrumented(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    String traceId = newTraceId();
+
+    String frontend = appendSuffix(TestObjects.FRONTEND.serviceName(), testSuffix);
+    String backend = appendSuffix(TestObjects.BACKEND.serviceName(), testSuffix);
+    String db = appendSuffix(TestObjects.DB.serviceName(), testSuffix);
+
+    Endpoint one = Endpoint.newBuilder().serviceName(frontend).ip("127.0.0.1").build();
     Endpoint onePort3001 = one.toBuilder().port(3001).build();
-    Endpoint two = Endpoint.newBuilder().serviceName("trace-producer-two").ip("127.0.0.2").build();
+    Endpoint two = Endpoint.newBuilder().serviceName(backend).ip("127.0.0.2").build();
     Endpoint twoPort3002 = two.toBuilder().port(3002).build();
-    Endpoint three =
-      Endpoint.newBuilder().serviceName("trace-producer-three").ip("127.0.0.3").build();
+    Endpoint three = Endpoint.newBuilder().serviceName(db).ip("127.0.0.3").build();
 
     List<Span> trace = asList(
-      Span.newBuilder().traceId("10").id("10").name("get")
+      Span.newBuilder().traceId(traceId).id("10").name("get")
         .kind(Kind.SERVER)
         .timestamp(TODAY * 1000L)
         .duration(350 * 1000L)
         .localEndpoint(one)
         .build(),
-      Span.newBuilder().traceId("10").parentId("10").id("20").name("get")
+      Span.newBuilder().traceId(traceId).parentId("10").id("20").name("get")
         .kind(Kind.CLIENT)
         .timestamp((TODAY + 50) * 1000L)
         .duration(250 * 1000L)
         .localEndpoint(onePort3001)
         .build(),
-      Span.newBuilder().traceId("10").parentId("10").id("20").name("get").shared(true)
+      Span.newBuilder().traceId(traceId).parentId("10").id("20").name("get").shared(true)
         .kind(Kind.SERVER)
         .timestamp((TODAY + 100) * 1000L)
         .duration(150 * 1000L)
         .localEndpoint(two)
         .build(),
-      Span.newBuilder().traceId("10").parentId("20").id("30").name("query")
+      Span.newBuilder().traceId(traceId).parentId("20").id("30").name("query")
         .kind(Kind.CLIENT)
         .timestamp((TODAY + 150) * 1000L)
         .duration(50 * 1000L)
         .localEndpoint(twoPort3002)
         .build(),
-      Span.newBuilder().traceId("10").parentId("20").id("30").name("query").shared(true)
+      Span.newBuilder().traceId(traceId).parentId("20").id("30").name("query").shared(true)
         .kind(Kind.SERVER)
         .timestamp((TODAY + 160) * 1000L)
         .duration(20 * 1000L)
@@ -196,30 +199,35 @@ public abstract class ITDependencies<T extends StorageComponent> extends ITStora
 
     processDependencies(trace);
 
-    assertThat(store().getDependencies(TRACE_ENDTS, DAY).execute()).containsOnly(
+    assertThat(store().getDependencies(endTs(trace), DAY).execute()).containsOnly(
       DependencyLink.newBuilder()
-        .parent("trace-producer-one")
-        .child("trace-producer-two")
+        .parent(frontend)
+        .child(backend)
         .callCount(1)
         .build(),
       DependencyLink.newBuilder()
-        .parent("trace-producer-two")
-        .child("trace-producer-three")
+        .parent(backend)
+        .child(db)
         .callCount(1)
         .build()
     );
   }
 
-  @Test protected void dependencies_loopback() throws Exception {
+  @Test protected void dependencies_loopback(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    List<Span> trace = newTrace(testSuffix);
+
     List<Span> traceWithLoopback = asList(
-      TRACE.get(0),
-      TRACE.get(1).toBuilder().remoteEndpoint(TRACE.get(0).localEndpoint()).build()
+      trace.get(0),
+      trace.get(1).toBuilder().remoteEndpoint(trace.get(0).localEndpoint()).build()
     );
 
     processDependencies(traceWithLoopback);
 
-    assertThat(store().getDependencies(TRACE_ENDTS, TRACE_DURATION).execute()).containsOnly(
-      DependencyLink.newBuilder().parent("frontend").child("frontend").callCount(1).build()
+    String frontend = appendSuffix(TestObjects.FRONTEND.serviceName(), testSuffix);
+
+    assertThat(store().getDependencies(endTs(trace), DAY).execute()).containsOnly(
+      DependencyLink.newBuilder().parent(frontend).child(frontend).callCount(1).build()
     );
   }
 
@@ -227,39 +235,52 @@ public abstract class ITDependencies<T extends StorageComponent> extends ITStora
    * Some systems log a different trace id than the root span. This seems "headless", as we won't
    * see a span whose id is the same as the trace id.
    */
-  @Test protected void dependencies_headlessTrace() throws Exception {
-    ArrayList<Span> trace = new ArrayList<>(TRACE);
+  @Test protected void dependencies_headlessTrace(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    ArrayList<Span> trace = new ArrayList<>(newTrace(testSuffix));
     trace.remove(0);
     processDependencies(trace);
 
-    assertThat(store().getDependencies(TRACE_ENDTS, DAY).execute())
-      .containsExactlyInAnyOrderElementsOf(LINKS);
+    assertThat(store().getDependencies(endTs(trace), DAY).execute())
+      .containsExactlyInAnyOrderElementsOf(links(testSuffix));
   }
 
-  @Test protected void looksBackIndefinitely() throws Exception {
-    processDependencies(TRACE);
+  @Test protected void looksBackIndefinitely(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    List<Span> trace = newTrace(testSuffix);
 
-    assertThat(store().getDependencies(TRACE_ENDTS, TRACE_ENDTS).execute())
-      .containsExactlyInAnyOrderElementsOf(LINKS);
+    processDependencies(trace);
+
+    assertThat(store().getDependencies(endTs(trace), DAY).execute())
+      .containsExactlyInAnyOrderElementsOf(links(testSuffix));
   }
 
   /** Ensure complete traces are aggregated, even if they complete after endTs */
-  @Test protected void endTsInsideTheTrace() throws Exception {
-    processDependencies(TRACE);
+  @Test protected void endTsInsideTheTrace(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    List<Span> trace = newTrace(testSuffix);
 
-    assertThat(store().getDependencies(TRACE_STARTTS + 100, 200).execute())
-      .containsExactlyInAnyOrderElementsOf(LINKS);
+    processDependencies(trace);
+
+    assertThat(store().getDependencies(startTs(trace) + 100, 200).execute())
+      .containsExactlyInAnyOrderElementsOf(links(testSuffix));
   }
 
-  @Test protected void endTimeBeforeData() throws Exception {
-    processDependencies(TRACE);
+  @Test protected void endTimeBeforeData(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    List<Span> trace = newTrace(testSuffix);
 
-    assertThat(store().getDependencies(TRACE_STARTTS - 1000L, 1000L).execute())
+    processDependencies(trace);
+
+    assertThat(store().getDependencies(startTs(trace) - 1000L, 1000L).execute())
       .isEmpty();
   }
 
-  @Test protected void lookbackAfterData() throws Exception {
-    processDependencies(TRACE);
+  @Test protected void lookbackAfterData(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    List<Span> trace = newTrace(testSuffix);
+
+    processDependencies(trace);
 
     assertThat(store().getDependencies(TODAY + 2 * DAY, DAY).execute())
       .isEmpty();
@@ -270,170 +291,185 @@ public abstract class ITDependencies<T extends StorageComponent> extends ITStora
    * endpoint. Specifically, this detects an uninstrumented client before the trace and an
    * uninstrumented server at the end of it.
    */
-  @Test protected void notInstrumentedClientAndServer() throws Exception {
-    Endpoint someClient = Endpoint.newBuilder().serviceName("some-client").ip("172.17.0.4").build();
+  @Test protected void notInstrumentedClientAndServer(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    String traceId = newTraceId();
+
+    Endpoint kafka = suffixServiceName(TestObjects.KAFKA, testSuffix);
+    Endpoint frontend = suffixServiceName(TestObjects.FRONTEND, testSuffix);
+    Endpoint backend = suffixServiceName(TestObjects.BACKEND, testSuffix);
+    Endpoint db = suffixServiceName(TestObjects.DB, testSuffix);
 
     List<Span> trace = asList(
-      Span.newBuilder().traceId("20").id("20").name("get")
+      Span.newBuilder().traceId(traceId).id("20").name("get")
         .timestamp(TODAY * 1000L).duration(350L * 1000L)
         .kind(Kind.SERVER)
-        .localEndpoint(FRONTEND)
-        .remoteEndpoint(someClient)
+        .localEndpoint(frontend)
+        .remoteEndpoint(kafka)
         .build(),
-      Span.newBuilder().traceId("20").parentId("20").id("21").name("get")
+      Span.newBuilder().traceId(traceId).parentId("20").id("21").name("get")
         .timestamp((TODAY + 50L) * 1000L).duration(250L * 1000L)
         .kind(Kind.CLIENT)
-        .localEndpoint(FRONTEND)
+        .localEndpoint(frontend)
         .build(),
-      Span.newBuilder().traceId("20").parentId("20").id("21").name("get").shared(true)
+      Span.newBuilder().traceId(traceId).parentId("20").id("21").name("get").shared(true)
         .timestamp((TODAY + 250) * 1000L).duration(50L * 1000L)
         .kind(Kind.SERVER)
-        .localEndpoint(BACKEND)
+        .localEndpoint(backend)
         .build(),
-      Span.newBuilder().traceId("20").parentId("21").id("22").name("get")
+      Span.newBuilder().traceId(traceId).parentId("21").id("22").name("get")
         .timestamp((TODAY + 150L) * 1000L).duration(50L * 1000L)
         .kind(Kind.CLIENT)
-        .localEndpoint(BACKEND)
-        .remoteEndpoint(DB)
+        .localEndpoint(backend)
+        .remoteEndpoint(db)
         .build()
     );
 
     processDependencies(trace);
 
-    assertThat(store().getDependencies(TRACE_ENDTS, DAY).execute()).containsOnly(
-      DependencyLink.newBuilder().parent("some-client").child("frontend").callCount(1).build(),
-      DependencyLink.newBuilder().parent("frontend").child("backend").callCount(1).build(),
-      DependencyLink.newBuilder().parent("backend").child("db").callCount(1).build()
+    assertThat(store().getDependencies(endTs(trace), DAY).execute()).containsOnly(
+      DependencyLink.newBuilder()
+        .parent(kafka.serviceName())
+        .child(frontend.serviceName())
+        .callCount(1)
+        .build(),
+      DependencyLink.newBuilder()
+        .parent(frontend.serviceName())
+        .child(backend.serviceName())
+        .callCount(1)
+        .build(),
+      DependencyLink.newBuilder()
+        .parent(backend.serviceName())
+        .child(db.serviceName())
+        .callCount(1)
+        .build()
     );
   }
 
-  @Test protected void endTsAndLookbackMustBePositive() throws IOException {
-    try {
-      store().getDependencies(0L, DAY).execute();
-      failBecauseExceptionWasNotThrown(IllegalArgumentException.class);
-    } catch (IllegalArgumentException e) {
-      assertThat(e).hasMessage("endTs <= 0");
-    }
+  /** This tests we error prior to executing the call. */
+  @Test protected void endTsAndLookbackMustBePositive() {
+    SpanStore store = store();
+    assertThatThrownBy(() -> store.getDependencies(0L, DAY))
+      .isInstanceOf(IllegalArgumentException.class)
+      .hasMessage("endTs <= 0");
 
-    try {
-      store().getDependencies(TRACE_ENDTS, 0L).execute();
-      failBecauseExceptionWasNotThrown(IllegalArgumentException.class);
-    } catch (IllegalArgumentException e) {
-      assertThat(e).hasMessage("lookback <= 0");
-    }
+    assertThatThrownBy(() -> store.getDependencies(TODAY, 0L))
+      .isInstanceOf(IllegalArgumentException.class)
+      .hasMessage("lookback <= 0");
   }
 
-  @Test protected void instrumentedClientAndServer() throws Exception {
+  @Test protected void instrumentedClientAndServer(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    String traceId = newTraceId();
+
+    Endpoint frontend = suffixServiceName(TestObjects.FRONTEND, testSuffix);
+    Endpoint backend = suffixServiceName(TestObjects.BACKEND, testSuffix);
+    Endpoint db = suffixServiceName(TestObjects.DB, testSuffix);
+
     List<Span> trace = asList(
-      Span.newBuilder().traceId("10").id("10").name("get")
+      Span.newBuilder().traceId(traceId).id("10").name("get")
         .timestamp((TODAY + 50L) * 1000L).duration(250L * 1000L)
         .kind(Kind.CLIENT)
-        .localEndpoint(FRONTEND)
+        .localEndpoint(frontend)
         .build(),
-      Span.newBuilder().traceId("10").id("10").name("get").shared(true)
+      Span.newBuilder().traceId(traceId).id("10").name("get").shared(true)
         .timestamp((TODAY + 100) * 1000L).duration(150L * 1000L)
         .kind(Kind.SERVER)
-        .localEndpoint(BACKEND)
+        .localEndpoint(backend)
         .build(),
-      Span.newBuilder().traceId("10").parentId("10").id("11").name("get")
+      Span.newBuilder().traceId(traceId).parentId("10").id("11").name("get")
         .timestamp((TODAY + 150L) * 1000L).duration(50L * 1000L)
         .kind(Kind.CLIENT)
-        .localEndpoint(BACKEND)
-        .remoteEndpoint(DB)
+        .localEndpoint(backend)
+        .remoteEndpoint(db)
         .build()
     );
 
     processDependencies(trace);
 
-    assertThat(store().getDependencies(TRACE_ENDTS, DAY).execute()).containsOnly(
-      DependencyLink.newBuilder().parent("frontend").child("backend").callCount(1).build(),
-      DependencyLink.newBuilder().parent("backend").child("db").callCount(1).build()
+    assertThat(store().getDependencies(endTs(trace), DAY).execute()).containsOnly(
+      DependencyLink.newBuilder()
+        .parent(frontend.serviceName())
+        .child(backend.serviceName())
+        .callCount(1)
+        .build(),
+      DependencyLink.newBuilder()
+        .parent(backend.serviceName())
+        .child(db.serviceName())
+        .callCount(1)
+        .build()
     );
   }
 
-  @Test protected void instrumentedProducerAndConsumer() throws Exception {
+  @Test protected void instrumentedProducerAndConsumer(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    String traceId = newTraceId();
+
+    Endpoint kafka = suffixServiceName(TestObjects.KAFKA, testSuffix);
+    Endpoint frontend = suffixServiceName(TestObjects.FRONTEND, testSuffix);
+    Endpoint backend = suffixServiceName(TestObjects.BACKEND, testSuffix);
+
     List<Span> trace = asList(
-      Span.newBuilder().traceId("10").id("10").name("send")
+      Span.newBuilder().traceId(traceId).id("10").name("send")
         .timestamp((TODAY + 50L) * 1000L).duration(1)
         .kind(Kind.PRODUCER)
-        .localEndpoint(FRONTEND)
-        .remoteEndpoint(KAFKA)
+        .localEndpoint(frontend)
+        .remoteEndpoint(kafka)
         .build(),
-      Span.newBuilder().traceId("10").parentId("10").id("11").name("receive")
+      Span.newBuilder().traceId(traceId).parentId("10").id("11").name("receive")
         .timestamp((TODAY + 100) * 1000L).duration(1)
         .kind(Kind.CONSUMER)
-        .remoteEndpoint(KAFKA)
-        .localEndpoint(BACKEND)
+        .remoteEndpoint(kafka)
+        .localEndpoint(backend)
         .build()
     );
 
     processDependencies(trace);
 
-    assertThat(store().getDependencies(TRACE_ENDTS, DAY).execute()).containsOnly(
-      DependencyLink.newBuilder().parent("frontend").child("kafka").callCount(1).build(),
-      DependencyLink.newBuilder().parent("kafka").child("backend").callCount(1).build()
+    assertThat(store().getDependencies(endTs(trace), DAY).execute()).containsOnly(
+      DependencyLink.newBuilder()
+        .parent(frontend.serviceName())
+        .child(kafka.serviceName())
+        .callCount(1)
+        .build(),
+      DependencyLink.newBuilder()
+        .parent(kafka.serviceName())
+        .child(backend.serviceName())
+        .callCount(1)
+        .build()
     );
-  }
-
-  /** Ensure there's no query limit problem around links */
-  @Test protected void manyLinks() throws Exception {
-    int count = 1000; // Larger than 10, which is the default ES search limit that tripped this
-    List<Span> spans = new ArrayList<>(count);
-    for (int i = 1; i <= count; i++) {
-      Endpoint web = FRONTEND.toBuilder().serviceName("web-" + i).build();
-      Endpoint app = BACKEND.toBuilder().serviceName("app-" + i).build();
-      Endpoint db = DB.toBuilder().serviceName("db-" + i).build();
-
-      spans.add(Span.newBuilder().traceId(Integer.toHexString(i)).id("10").name("get")
-        .timestamp((TODAY + 50L) * 1000L).duration(250L * 1000L)
-        .kind(Kind.CLIENT)
-        .localEndpoint(web)
-        .build()
-      );
-      spans.add(Span.newBuilder().traceId(Integer.toHexString(i)).id("10").name("get").shared(true)
-        .timestamp((TODAY + 100) * 1000L).duration(150 * 1000L)
-        .kind(Kind.SERVER)
-        .localEndpoint(app)
-        .build()
-      );
-      spans.add(
-        Span.newBuilder().traceId(Integer.toHexString(i)).parentId("10").id("11").name("get")
-          .timestamp((TODAY + 150L) * 1000L).duration(50L * 1000L)
-          .kind(Kind.CLIENT)
-          .localEndpoint(app)
-          .remoteEndpoint(db)
-          .build()
-      );
-    }
-
-    processDependencies(spans);
-
-    List<DependencyLink> links = store().getDependencies(TRACE_ENDTS, DAY).execute();
-    assertThat(links).hasSize(count * 2); // web-? -> app-?, app-? -> db-?
-    assertThat(links).extracting(DependencyLink::callCount)
-      .allSatisfy(callCount -> assertThat(callCount).isEqualTo(1));
   }
 
   /** This shows a missing parent still results in a dependency link when local endpoints change */
-  @Test protected void missingIntermediateSpan() throws Exception {
+  @Test protected void missingIntermediateSpan(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    String traceId = newTraceId();
+
+    Endpoint frontend = suffixServiceName(TestObjects.FRONTEND, testSuffix);
+    Endpoint backend = suffixServiceName(TestObjects.BACKEND, testSuffix);
+
     List<Span> trace = asList(
-      Span.newBuilder().traceId("20").id("20").name("get")
+      Span.newBuilder().traceId(traceId).id("20").name("get")
         .timestamp(TODAY * 1000L).duration(350L * 1000L)
         .kind(Kind.SERVER)
-        .localEndpoint(FRONTEND)
+        .localEndpoint(frontend)
         .build(),
       // missing an intermediate span
-      Span.newBuilder().traceId("20").parentId("21").id("22").name("get")
+      Span.newBuilder().traceId(traceId).parentId("21").id("22").name("get")
         .timestamp((TODAY + 150L) * 1000L).duration(50L * 1000L)
         .kind(Kind.CLIENT)
-        .localEndpoint(BACKEND)
+        .localEndpoint(backend)
         .build()
     );
 
     processDependencies(trace);
 
-    assertThat(store().getDependencies(TRACE_ENDTS, DAY).execute()).containsOnly(
-      DependencyLink.newBuilder().parent("frontend").child("backend").callCount(1).build()
+    assertThat(store().getDependencies(endTs(trace), DAY).execute()).containsOnly(
+      DependencyLink.newBuilder()
+        .parent(frontend.serviceName())
+        .child(backend.serviceName())
+        .callCount(1)
+        .build()
     );
   }
 
@@ -441,152 +477,219 @@ public abstract class ITDependencies<T extends StorageComponent> extends ITStora
    * This test shows that dependency links can be filtered at daily granularity. This allows the UI
    * to look for dependency intervals besides TODAY.
    */
-  @Test protected void canSearchForIntervalsBesidesToday() throws Exception {
+  @Test protected void canSearchForIntervalsBesidesToday(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    List<Span> trace = newTrace(testSuffix);
+
     // Let's pretend we have two days of data processed
     //  - Note: calling this twice allows test implementations to consider timestamps
-    processDependencies(subtractDay(TRACE));
-    processDependencies(TRACE);
+    processDependencies(subtractDay(trace));
+    processDependencies(trace);
 
     // A user looks at today's links.
     //  - Note: Using the smallest lookback avoids bumping into implementation around windowing.
-    assertThat(store().getDependencies(TRACE_ENDTS, TRACE_DURATION).execute())
-      .containsExactlyInAnyOrderElementsOf(LINKS);
+    long lookback = trace.get(0).durationAsLong() / 1000L;
+    assertThat(store().getDependencies(endTs(trace), lookback).execute())
+      .containsExactlyInAnyOrderElementsOf(links(testSuffix));
 
     // A user compares the links from those a day ago.
-    assertThat(store().getDependencies(TRACE_ENDTS - DAY, DAY).execute())
-      .containsExactlyInAnyOrderElementsOf(LINKS);
+    assertThat(store().getDependencies(endTs(trace) - DAY, DAY).execute())
+      .containsExactlyInAnyOrderElementsOf(links(testSuffix));
 
     // A user looks at all links since data started
-    assertThat(store().getDependencies(TRACE_ENDTS, TRACE_ENDTS).execute()).containsOnly(
-      DependencyLink.newBuilder().parent("frontend").child("backend").callCount(2L).build(),
-      DependencyLink.newBuilder().parent("backend").child("db").callCount(2L).errorCount(2L).build()
+    String frontend = appendSuffix(TestObjects.FRONTEND.serviceName(), testSuffix);
+    String backend = appendSuffix(TestObjects.BACKEND.serviceName(), testSuffix);
+    String db = appendSuffix(TestObjects.DB.serviceName(), testSuffix);
+
+    assertThat(store().getDependencies(endTs(trace), DAY * 2).execute()).containsOnly(
+      DependencyLink.newBuilder().parent(frontend).child(backend).callCount(2L).build(),
+      DependencyLink.newBuilder().parent(backend).child(db).callCount(2L).errorCount(2L).build()
     );
   }
 
-  @Test protected void spanKindIsNotRequiredWhenEndpointsArePresent() throws Exception {
-    Endpoint someClient = Endpoint.newBuilder().serviceName("some-client").ip("172.17.0.4").build();
+  @Test
+  protected void spanKindIsNotRequiredWhenEndpointsArePresent(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    String traceId = newTraceId();
+
+    Endpoint kafka = suffixServiceName(TestObjects.KAFKA, testSuffix);
+    Endpoint frontend = suffixServiceName(TestObjects.FRONTEND, testSuffix);
+    Endpoint backend = suffixServiceName(TestObjects.BACKEND, testSuffix);
+    Endpoint db = suffixServiceName(TestObjects.DB, testSuffix);
 
     List<Span> trace = asList(
-      Span.newBuilder().traceId("20").id("20").name("get")
+      Span.newBuilder().traceId(traceId).id("20").name("get")
         .timestamp(TODAY * 1000L).duration(350L * 1000L)
-        .localEndpoint(someClient)
-        .remoteEndpoint(FRONTEND).build(),
-      Span.newBuilder().traceId("20").parentId("20").id("21").name("get")
+        .localEndpoint(kafka)
+        .remoteEndpoint(frontend).build(),
+      Span.newBuilder().traceId(traceId).parentId("20").id("21").name("get")
         .timestamp((TODAY + 50) * 1000L).duration(250L * 1000L)
-        .localEndpoint(FRONTEND)
-        .remoteEndpoint(BACKEND).build(),
-      Span.newBuilder().traceId("20").parentId("21").id("22").name("get")
+        .localEndpoint(frontend)
+        .remoteEndpoint(backend).build(),
+      Span.newBuilder().traceId(traceId).parentId("21").id("22").name("get")
         .timestamp((TODAY + 150) * 1000L).duration(50L * 1000L)
-        .localEndpoint(BACKEND)
-        .remoteEndpoint(DB).build()
+        .localEndpoint(backend)
+        .remoteEndpoint(db).build()
     );
 
     processDependencies(trace);
 
     assertThat(store().getDependencies(TODAY + 1000, 1000L).execute()).containsOnly(
-      DependencyLink.newBuilder().parent("some-client").child("frontend").callCount(1).build(),
-      DependencyLink.newBuilder().parent("frontend").child("backend").callCount(1).build(),
-      DependencyLink.newBuilder().parent("backend").child("db").callCount(1).build()
+      DependencyLink.newBuilder()
+        .parent(kafka.serviceName())
+        .child(frontend.serviceName())
+        .callCount(1)
+        .build(),
+      DependencyLink.newBuilder()
+        .parent(frontend.serviceName())
+        .child(backend.serviceName())
+        .callCount(1)
+        .build(),
+      DependencyLink.newBuilder()
+        .parent(backend.serviceName())
+        .child(db.serviceName())
+        .callCount(1)
+        .build()
     );
   }
 
-  @Test protected void unnamedEndpointsAreSkipped() throws Exception {
+  @Test protected void unnamedEndpointsAreSkipped(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    String traceId = newTraceId();
+
+    Endpoint frontend = suffixServiceName(TestObjects.FRONTEND, testSuffix);
+    Endpoint backend = suffixServiceName(TestObjects.BACKEND, testSuffix);
+    Endpoint db = suffixServiceName(TestObjects.DB, testSuffix);
+
     List<Span> trace = asList(
-      Span.newBuilder().traceId("20").id("20").name("get")
+      Span.newBuilder().traceId(traceId).id("20").name("get")
         .timestamp(TODAY * 1000L).duration(350L * 1000L)
         .localEndpoint(Endpoint.newBuilder().ip("172.17.0.4").build())
-        .remoteEndpoint(FRONTEND).build(),
-      Span.newBuilder().traceId("20").parentId("20").id("21").name("get")
+        .remoteEndpoint(frontend).build(),
+      Span.newBuilder().traceId(traceId).parentId("20").id("21").name("get")
         .timestamp((TODAY + 50) * 1000L).duration(250L * 1000L)
-        .localEndpoint(FRONTEND)
-        .remoteEndpoint(BACKEND).build(),
-      Span.newBuilder().traceId("20").parentId("21").id("22").name("get")
+        .localEndpoint(frontend)
+        .remoteEndpoint(backend).build(),
+      Span.newBuilder().traceId(traceId).parentId("21").id("22").name("get")
         .timestamp((TODAY + 150) * 1000L).duration(50L * 1000L)
-        .localEndpoint(BACKEND)
-        .remoteEndpoint(DB).build()
+        .localEndpoint(backend)
+        .remoteEndpoint(db).build()
     );
 
     processDependencies(trace);
 
     // note there is no empty string service names
     assertThat(store().getDependencies(TODAY + 1000, 1000L).execute()).containsOnly(
-      DependencyLink.newBuilder().parent("frontend").child("backend").callCount(1).build(),
-      DependencyLink.newBuilder().parent("backend").child("db").callCount(1).build()
+      DependencyLink.newBuilder()
+        .parent(frontend.serviceName())
+        .child(backend.serviceName())
+        .callCount(1)
+        .build(),
+      DependencyLink.newBuilder()
+        .parent(backend.serviceName())
+        .child(db.serviceName())
+        .callCount(1)
+        .build()
     );
   }
 
   /**
    * This test confirms that the span store can process trace with intermediate spans like the below
    * properly.
-   *
+   * <p>
    * span1: SR SS span2: intermediate call span3: CS SR SS CR: Dependency 1
    */
-  @Test protected void intermediateSpans() throws Exception {
+  @Test protected void intermediateSpans(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    String traceId = newTraceId();
+
+    Endpoint frontend = suffixServiceName(TestObjects.FRONTEND, testSuffix);
+    Endpoint backend = suffixServiceName(TestObjects.BACKEND, testSuffix);
+    Endpoint db = suffixServiceName(TestObjects.DB, testSuffix);
+
     List<Span> trace = asList(
-      Span.newBuilder().traceId("20").id("20").name("get")
+      Span.newBuilder().traceId(traceId).id("20").name("get")
         .timestamp(TODAY * 1000L).duration(350L * 1000L)
         .kind(Kind.SERVER)
-        .localEndpoint(FRONTEND).build(),
-      Span.newBuilder().traceId("20").parentId("20").id("21").name("call")
+        .localEndpoint(frontend).build(),
+      Span.newBuilder().traceId(traceId).parentId("20").id("21").name("call")
         .timestamp((TODAY + 25) * 1000L).duration(325L * 1000L)
-        .localEndpoint(FRONTEND).build(),
-      Span.newBuilder().traceId("20").parentId("21").id("22").name("get")
+        .localEndpoint(frontend).build(),
+      Span.newBuilder().traceId(traceId).parentId("21").id("22").name("get")
         .timestamp((TODAY + 50) * 1000L).duration(250L * 1000L)
         .kind(Kind.CLIENT)
-        .localEndpoint(FRONTEND).build(),
-      Span.newBuilder().traceId("20").parentId("21").id("22").name("get")
+        .localEndpoint(frontend).build(),
+      Span.newBuilder().traceId(traceId).parentId("21").id("22").name("get")
         .timestamp((TODAY + 100) * 1000L).duration(150 * 1000L).shared(true)
         .kind(Kind.SERVER)
-        .localEndpoint(BACKEND).build(),
-      Span.newBuilder().traceId("20").parentId("22").id(23L).name("call")
+        .localEndpoint(backend).build(),
+      Span.newBuilder().traceId(traceId).parentId("22").id(23L).name("call")
         .timestamp((TODAY + 110) * 1000L).duration(130L * 1000L)
         .name("depth4")
-        .localEndpoint(BACKEND).build(),
-      Span.newBuilder().traceId("20").parentId(23L).id(24L).name("call")
+        .localEndpoint(backend).build(),
+      Span.newBuilder().traceId(traceId).parentId(23L).id(24L).name("call")
         .timestamp((TODAY + 125) * 1000L).duration(105L * 1000L)
         .name("depth5")
-        .localEndpoint(BACKEND).build(),
-      Span.newBuilder().traceId("20").parentId(24L).id(25L).name("get")
+        .localEndpoint(backend).build(),
+      Span.newBuilder().traceId(traceId).parentId(24L).id(25L).name("get")
         .timestamp((TODAY + 150) * 1000L).duration(50L * 1000L)
         .kind(Kind.CLIENT)
-        .localEndpoint(BACKEND)
-        .remoteEndpoint(DB).build()
+        .localEndpoint(backend)
+        .remoteEndpoint(db).build()
     );
 
     processDependencies(trace);
 
     assertThat(store().getDependencies(TODAY + 1000, 1000L).execute()).containsOnly(
-      DependencyLink.newBuilder().parent("frontend").child("backend").callCount(1).build(),
-      DependencyLink.newBuilder().parent("backend").child("db").callCount(1).build()
+      DependencyLink.newBuilder()
+        .parent(frontend.serviceName())
+        .child(backend.serviceName())
+        .callCount(1)
+        .build(),
+      DependencyLink.newBuilder()
+        .parent(backend.serviceName())
+        .child(db.serviceName())
+        .callCount(1)
+        .build()
     );
   }
 
   /**
    * This test confirms that the span store can process trace with intermediate spans like the below
    * properly.
-   *
+   * <p>
    * span1: SR SS span2: intermediate call span3: CS SR SS CR: Dependency 1
    */
-  @Test protected void duplicateAddress() throws Exception {
+  @Test protected void duplicateAddress(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    String traceId = newTraceId();
+
+    Endpoint frontend = suffixServiceName(TestObjects.FRONTEND, testSuffix);
+    Endpoint backend = suffixServiceName(TestObjects.BACKEND, testSuffix);
+
     V1SpanConverter converter = V1SpanConverter.create();
     List<Span> trace = new ArrayList<>();
-    converter.convert(V1Span.newBuilder().traceId("20").id("20").name("get")
+    converter.convert(V1Span.newBuilder().traceId(traceId).id("20").name("get")
       .timestamp(TODAY * 1000L).duration(350L * 1000L)
-      .addAnnotation(TODAY * 1000, "sr", FRONTEND)
-      .addAnnotation((TODAY + 350) * 1000, "ss", FRONTEND)
-      .addBinaryAnnotation("ca", FRONTEND)
-      .addBinaryAnnotation("sa", FRONTEND).build(), trace);
-    converter.convert(V1Span.newBuilder().traceId("20").parentId("21").id("22").name("get")
+      .addAnnotation(TODAY * 1000, "sr", frontend)
+      .addAnnotation((TODAY + 350) * 1000, "ss", frontend)
+      .addBinaryAnnotation("ca", frontend)
+      .addBinaryAnnotation("sa", frontend).build(), trace);
+    converter.convert(V1Span.newBuilder().traceId(traceId).parentId("21").id("22").name("get")
       .timestamp((TODAY + 50) * 1000L).duration(250L * 1000L)
-      .addAnnotation((TODAY + 50) * 1000, "cs", FRONTEND)
-      .addAnnotation((TODAY + 300) * 1000, "cr", FRONTEND)
-      .addBinaryAnnotation("ca", BACKEND)
-      .addBinaryAnnotation("sa", BACKEND).build(), trace);
+      .addAnnotation((TODAY + 50) * 1000, "cs", frontend)
+      .addAnnotation((TODAY + 300) * 1000, "cr", frontend)
+      .addBinaryAnnotation("ca", backend)
+      .addBinaryAnnotation("sa", backend).build(), trace);
 
     processDependencies(trace);
 
     assertThat(store().getDependencies(TODAY + 1000, 1000L).execute()).containsOnly(
-      DependencyLink.newBuilder().parent("frontend").child("backend").callCount(1).build()
+      DependencyLink.newBuilder()
+        .parent(frontend.serviceName())
+        .child(backend.serviceName())
+        .callCount(1)
+        .build()
     );
   }
 
@@ -594,79 +697,107 @@ public abstract class ITDependencies<T extends StorageComponent> extends ITStora
    * Span starts on one host and ends on the other. In both cases, a response is neither sent nor
    * received.
    */
-  @Test protected void oneway() throws Exception {
+  @Test protected void oneway(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    String traceId = newTraceId();
+
+    Endpoint frontend = suffixServiceName(TestObjects.FRONTEND, testSuffix);
+    Endpoint backend = suffixServiceName(TestObjects.BACKEND, testSuffix);
+
     List<Span> trace = asList(
-      Span.newBuilder().traceId("10").id("10")
+      Span.newBuilder().traceId(traceId).id("10")
         .timestamp((TODAY + 50) * 1000)
         .kind(Kind.CLIENT)
-        .localEndpoint(FRONTEND)
+        .localEndpoint(frontend)
         .build(),
-      Span.newBuilder().traceId("10").id("10").shared(true)
+      Span.newBuilder().traceId(traceId).id("10").shared(true)
         .timestamp((TODAY + 100) * 1000)
         .kind(Kind.SERVER)
-        .localEndpoint(BACKEND)
+        .localEndpoint(backend)
         .build()
     );
 
     processDependencies(trace);
 
-    assertThat(store().getDependencies(TRACE_ENDTS, TRACE_DURATION).execute()).containsOnly(
-      DependencyLink.newBuilder().parent("frontend").child("backend").callCount(1).build()
+    assertThat(store().getDependencies(endTs(trace), DAY).execute()).containsOnly(
+      DependencyLink.newBuilder()
+        .parent(frontend.serviceName())
+        .child(backend.serviceName())
+        .callCount(1)
+        .build()
     );
   }
 
   /** A timeline annotation named error is not a failed span. A tag/binary annotation is. */
-  @Test protected void annotationNamedErrorIsntError() throws Exception {
+  @Test protected void annotationNamedErrorIsntError(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    String traceId = newTraceId();
+
+    Endpoint frontend = suffixServiceName(TestObjects.FRONTEND, testSuffix);
+    Endpoint backend = suffixServiceName(TestObjects.BACKEND, testSuffix);
+
     List<Span> trace = asList(
-      Span.newBuilder().traceId("10").id("10")
+      Span.newBuilder().traceId(traceId).id("10")
         .timestamp((TODAY + 50) * 1000)
         .kind(Kind.CLIENT)
-        .localEndpoint(FRONTEND)
+        .localEndpoint(frontend)
         .build(),
-      Span.newBuilder().traceId("10").id("10").shared(true)
+      Span.newBuilder().traceId(traceId).id("10").shared(true)
         .timestamp((TODAY + 100) * 1000)
         .kind(Kind.SERVER)
-        .localEndpoint(BACKEND)
+        .localEndpoint(backend)
         .addAnnotation((TODAY + 72) * 1000, "error")
         .build()
     );
 
     processDependencies(trace);
 
-    assertThat(store().getDependencies(TRACE_ENDTS, TRACE_DURATION).execute()).containsOnly(
-      DependencyLink.newBuilder().parent("frontend").child("backend").callCount(1).build()
+    assertThat(store().getDependencies(endTs(trace), DAY).execute()).containsOnly(
+      DependencyLink.newBuilder()
+        .parent(frontend.serviceName())
+        .child(backend.serviceName())
+        .callCount(1)
+        .build()
     );
   }
 
   /** Async span starts from an uninstrumented source. */
-  @Test protected void oneway_noClient() throws Exception {
-    Endpoint kafka = Endpoint.newBuilder().serviceName("kafka").ip("172.17.0.4").build();
+  @Test protected void oneway_noClient(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    String traceId = newTraceId();
+
+    Endpoint backend = suffixServiceName(TestObjects.BACKEND, testSuffix);
+    Endpoint kafka = suffixServiceName(TestObjects.KAFKA, testSuffix);
 
     List<Span> trace = asList(
-      Span.newBuilder().traceId("10").id("10").name("receive")
+      Span.newBuilder().traceId(traceId).id("10").name("receive")
         .timestamp(TODAY * 1000)
         .kind(Kind.SERVER)
-        .localEndpoint(BACKEND)
+        .localEndpoint(backend)
         .remoteEndpoint(kafka)
         .build(),
-      Span.newBuilder().traceId("10").parentId("10").id("11").name("process")
+      Span.newBuilder().traceId(traceId).parentId("10").id("11").name("process")
         .timestamp((TODAY + 25) * 1000L).duration(325L * 1000L)
-        .localEndpoint(BACKEND).build()
+        .localEndpoint(backend).build()
     );
 
     processDependencies(trace);
 
-    assertThat(store().getDependencies(TRACE_ENDTS, DAY).execute()).containsOnly(
-      DependencyLink.newBuilder().parent("kafka").child("backend").callCount(1).build()
+    assertThat(store().getDependencies(endTs(trace), DAY).execute()).containsOnly(
+      DependencyLink.newBuilder()
+        .parent(kafka.serviceName())
+        .child(backend.serviceName())
+        .callCount(1)
+        .build()
     );
   }
 
   /** rebases a trace backwards a day with different trace. */
   List<Span> subtractDay(List<Span> trace) {
-    long random = new Random().nextLong();
+    long random = ThreadLocalRandom.current().nextLong();
     return trace.stream()
       .map(s -> {
-          Span.Builder b = s.toBuilder().traceId(Long.toHexString(random));
+          Span.Builder b = s.toBuilder().traceId(0L, random);
           if (s.timestampAsLong() != 0L) b.timestamp(s.timestampAsLong() - (DAY * 1000L));
           s.annotations().forEach(a -> b.addAnnotation(a.timestamp() - (DAY * 1000L), a.value()));
           return b.build();
@@ -675,7 +806,7 @@ public abstract class ITDependencies<T extends StorageComponent> extends ITStora
   }
 
   /** Returns links aggregated by midnight */
-  protected Map<Long, List<DependencyLink>> aggregateLinks(List<Span> spans) {
+  public static Map<Long, List<DependencyLink>> aggregateLinks(List<Span> spans) {
     Map<Long, DependencyLinker> midnightToLinker = new LinkedHashMap<>();
     for (List<Span> trace : GroupByTraceId.create(false).map(spans)) {
       long midnightOfTrace = flooredTraceTimestamp(trace);
@@ -686,6 +817,17 @@ public abstract class ITDependencies<T extends StorageComponent> extends ITStora
     Map<Long, List<DependencyLink>> result = new LinkedHashMap<>();
     midnightToLinker.forEach((midnight, linker) -> result.put(midnight, linker.link()));
     return result;
+  }
+
+  /** Default links produced by {@link TestObjects#newTrace(String)} */
+  static Iterable<? extends DependencyLink> links(String testSuffix) {
+    String frontend = appendSuffix(TestObjects.FRONTEND.serviceName(), testSuffix);
+    String backend = appendSuffix(TestObjects.BACKEND.serviceName(), testSuffix);
+    String db = appendSuffix(TestObjects.DB.serviceName(), testSuffix);
+    return asList(
+      DependencyLink.newBuilder().parent(frontend).child(backend).callCount(1L).build(),
+      DependencyLink.newBuilder().parent(backend).child(db).callCount(1L).errorCount(1L).build()
+    );
   }
 
   /** gets the timestamp in milliseconds floored to midnight */

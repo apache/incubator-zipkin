@@ -13,21 +13,10 @@
  */
 package zipkin2.storage.cassandra.v1;
 
-import com.datastax.driver.core.Cluster;
-import com.datastax.driver.core.HostDistance;
-import com.datastax.driver.core.PoolingOptions;
-import com.datastax.driver.core.QueryLogger;
-import com.datastax.driver.core.Session;
-import com.datastax.driver.core.policies.DCAwareRoundRobinPolicy;
-import com.datastax.driver.core.policies.LatencyAwarePolicy;
-import com.datastax.driver.core.policies.RoundRobinPolicy;
-import com.datastax.driver.core.policies.TokenAwarePolicy;
-import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Set;
-import zipkin2.storage.cassandra.internal.HostAndPort;
+import com.datastax.oss.driver.api.core.CqlSession;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import zipkin2.storage.cassandra.internal.SessionBuilder;
 
 /**
  * Creates a session and ensures schema if configured. Closes the cluster and session if any
@@ -35,81 +24,44 @@ import zipkin2.storage.cassandra.internal.HostAndPort;
  */
 public interface SessionFactory {
 
-  Session create(CassandraStorage storage);
+  CqlSession create(CassandraStorage storage);
 
   final class Default implements SessionFactory {
+    static final Logger LOG = LoggerFactory.getLogger(Schema.class);
 
     /**
      * Creates a session and ensures schema if configured. Closes the cluster and session if any
      * exception occurred.
      */
-    @Override
-    public Session create(CassandraStorage cassandra) {
-      Cluster cluster = null;
-      Session session = null;
+    @Override public CqlSession create(CassandraStorage cassandra) {
+      CqlSession session = null;
       try {
-        cluster = buildCluster(cassandra);
-        cluster.register(new QueryLogger.Builder().build());
+        session = buildSession(cassandra);
+
+        String keyspace = cassandra.keyspace;
         if (cassandra.ensureSchema) {
-          session = cluster.connect();
           Schema.ensureExists(cassandra.keyspace, session);
-          session.execute("USE " + cassandra.keyspace);
-          return session;
         } else {
-          return cluster.connect(cassandra.keyspace);
+          LOG.debug("Skipping schema check on keyspace {} as ensureSchema was false", keyspace);
         }
+
+        session.execute("USE " + keyspace);
+
+        return session;
       } catch (RuntimeException e) { // don't leak on unexpected exception!
         if (session != null) session.close();
-        if (cluster != null) cluster.close();
         throw e;
       }
     }
 
-    // Visible for testing
-    static Cluster buildCluster(CassandraStorage cassandra) {
-      Cluster.Builder builder = Cluster.builder().withoutJMXReporting();
-      List<InetSocketAddress> contactPoints = parseContactPoints(cassandra);
-      int defaultPort = findConnectPort(contactPoints);
-      builder.addContactPointsWithPorts(contactPoints);
-      builder.withPort(defaultPort); // This ends up protocolOptions.port
-      if (cassandra.username != null && cassandra.password != null) {
-        builder.withCredentials(cassandra.username, cassandra.password);
-      }
-      builder.withRetryPolicy(ZipkinRetryPolicy.INSTANCE);
-      builder.withLoadBalancingPolicy(
-          new TokenAwarePolicy(
-              new LatencyAwarePolicy.Builder(
-                      cassandra.localDc != null
-                          ? DCAwareRoundRobinPolicy.builder().withLocalDc(cassandra.localDc).build()
-                          : new RoundRobinPolicy()
-                      // This can select remote, but LatencyAwarePolicy will prefer local
-                      )
-                  .build()));
-      builder.withPoolingOptions(
-          new PoolingOptions()
-              .setMaxConnectionsPerHost(HostDistance.LOCAL, cassandra.maxConnections));
-      if (cassandra.useSsl) {
-        builder = builder.withSSL();
-      }
-      return builder.build();
-    }
-
-    static List<InetSocketAddress> parseContactPoints(CassandraStorage cassandra) {
-      List<InetSocketAddress> result = new ArrayList<>();
-      for (String contactPoint : cassandra.contactPoints.split(",", 100)) {
-        HostAndPort parsed = HostAndPort.fromString(contactPoint, 9042);
-        result.add(new InetSocketAddress(parsed.getHost(), parsed.getPort()));
-      }
-      return result;
-    }
-
-    /** Returns the consistent port across all contact points or 9042 */
-    static int findConnectPort(List<InetSocketAddress> contactPoints) {
-      Set<Integer> ports = new LinkedHashSet<>();
-      for (InetSocketAddress contactPoint : contactPoints) {
-        ports.add(contactPoint.getPort());
-      }
-      return ports.size() == 1 ? ports.iterator().next() : 9042;
+    static CqlSession buildSession(CassandraStorage cassandra) {
+      return SessionBuilder.buildSession(
+        cassandra.contactPoints,
+        cassandra.localDc,
+        cassandra.poolingOptions,
+        cassandra.authProvider,
+        cassandra.useSsl
+      );
     }
   }
 }

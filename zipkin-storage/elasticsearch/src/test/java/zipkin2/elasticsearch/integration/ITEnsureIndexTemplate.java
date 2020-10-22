@@ -20,50 +20,37 @@ import com.linecorp.armeria.common.HttpMethod;
 import com.linecorp.armeria.common.MediaType;
 import com.linecorp.armeria.common.RequestHeaders;
 import java.io.IOException;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 import org.junit.jupiter.api.TestInstance;
-import zipkin2.CheckResult;
 import zipkin2.Span;
 import zipkin2.elasticsearch.ElasticsearchStorage;
 import zipkin2.elasticsearch.internal.Internal;
-import zipkin2.storage.QueryRequest;
+import zipkin2.storage.ITStorage;
+import zipkin2.storage.StorageComponent;
 
 import static java.util.Arrays.asList;
-import static org.assertj.core.api.Assertions.assertThat;
-import static zipkin2.TestObjects.CLIENT_SPAN;
-import static zipkin2.TestObjects.DAY;
-import static zipkin2.TestObjects.TODAY;
+import static zipkin2.TestObjects.spanBuilder;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-abstract class ITEnsureIndexTemplate {
+abstract class ITEnsureIndexTemplate extends ITStorage<ElasticsearchStorage> {
+  @Override protected abstract ElasticsearchStorage.Builder newStorageBuilder(TestInfo testInfo);
 
-  ElasticsearchStorage storage;
-
-  /**
-   * Returns a new {@link ElasticsearchStorage.Builder} for connecting to the backend for the test.
-   */
-  abstract ElasticsearchStorage.Builder newStorageBuilder(TestInfo testInfo);
-
-  abstract void clear() throws Exception;
-
-  @AfterAll void closeStorage() {
-    storage.close();
+  @Override protected void configureStorageForTest(StorageComponent.Builder storage) {
   }
 
-  @AfterEach void clearStorage() throws Exception {
-    clear();
+  @Override protected boolean initializeStoragePerTest() {
+    return true; // We need a different index pattern per test
   }
 
-  @Test void createZipkinIndexTemplate_getTraces_returnsSuccess(TestInfo testInfo)
-    throws IOException {
-    ElasticsearchStorage.Builder builder = newStorageBuilder(testInfo);
-    storage = builder
-      .templatePriority(10)
-      .build();
+  @Override protected void clear() throws Exception {
+    storage.clear();
+  }
 
+  @Test
+  void createZipkinIndexTemplate_getTraces_returnsSuccess(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    storage = newStorageBuilder(testInfo).templatePriority(10).build();
     try {
       // Delete all index templates in order to create the "catch-all" index template, because
       // ES does not allow multiple index templates of the same index_patterns and priority
@@ -71,26 +58,17 @@ abstract class ITEnsureIndexTemplate {
       setUpCatchAllTemplate();
 
       // Implicitly creates an index template
-      CheckResult check = storage.check();
+      checkStorage();
 
-      assertThat(check.ok()).isTrue();
-
-      Span span = Span.newBuilder().traceId(CLIENT_SPAN.traceId())
-        .id("1")
-        .timestamp(TODAY * 1000L)
-        .putTag("queryTest", "ok")
-        .build();
-
-      storage.spanConsumer().accept(asList(span)).execute();
+      Span span = spanBuilder(testSuffix).putTag("queryTest", "ok").build();
+      accept(asList(span));
 
       // Assert that Zipkin's templates work and source is returned
-      assertThat(storage.spanStore().getTraces(QueryRequest.newBuilder()
-        .endTs(TODAY + DAY)
-        .lookback(DAY * 2)
-        .limit(10)
-        .parseAnnotationQuery("queryTest=" + span.tags().get("queryTest"))
-        .build()).execute())
-        .flatExtracting(t -> t).containsExactly(span);
+      assertGetTracesReturns(
+        requestBuilder()
+          .parseAnnotationQuery("queryTest=" + span.tags().get("queryTest"))
+          .build(),
+        asList(span));
     } finally {
       // Delete "catch-all" index template so it does not interfere with any other test
       deleteIndexTemplate("catch-all");
@@ -115,9 +93,7 @@ abstract class ITEnsureIndexTemplate {
     return "/_index_template/catch-all";
   }
 
-  /**
-   * Catch-all template doesn't store source
-   */
+  /** Catch-all template doesn't store source */
   String catchAllTemplate() {
     return "{\n"
       + "  \"index_patterns\" : [\"*\"],\n"

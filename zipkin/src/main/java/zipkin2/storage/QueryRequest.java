@@ -181,8 +181,8 @@ public final class QueryRequest {
     }
 
     /**
-     * Corresponds to query parameter "annotationQuery". Ex. "http.method=GET and error". Parameter keys and values are
-     * trimmed.
+     * Corresponds to query parameter "annotationQuery". Ex. "http.method=GET and error". Parameter
+     * keys and values are trimmed.
      *
      * @see QueryRequest#annotationQueryString()
      */
@@ -199,7 +199,8 @@ public final class QueryRequest {
           // tag
           String[] keyValue = ann.split("=", 2);
           // tags are put regardless, i.e. last tag wins
-          map.put(ann.substring(0, idx).trim(), keyValue.length < 2 ? "" : ann.substring(idx + 1).trim());
+          map.put(ann.substring(0, idx).trim(),
+            keyValue.length < 2 ? "" : ann.substring(idx + 1).trim());
         }
       }
       return annotationQuery(map);
@@ -383,18 +384,16 @@ public final class QueryRequest {
     this.limit = limit;
   }
 
-  @Override
-  public String toString() {
-    return "QueryRequest{"
-      + "serviceName=" + serviceName + ", "
-      + "remoteServiceName=" + remoteServiceName + ", "
-      + "spanName=" + spanName + ", "
-      + "annotationQuery=" + annotationQuery + ", "
-      + "minDuration=" + minDuration + ", "
-      + "maxDuration=" + maxDuration + ", "
-      + "endTs=" + endTs + ", "
-      + "lookback=" + lookback + ", "
-      + "limit=" + limit
-      + "}";
+  @Override public String toString() {
+    String result = "QueryRequest{";
+    result += ("endTs=" + endTs + ", ");
+    result += ("lookback=" + lookback + ", ");
+    if (serviceName != null) result += ("serviceName=" + serviceName + ", ");
+    if (remoteServiceName != null) result += ("remoteServiceName=" + remoteServiceName + ", ");
+    if (spanName != null) result += ("spanName=" + spanName + ", ");
+    if (!annotationQuery.isEmpty()) result += ("annotationQuery=" + annotationQuery + ", ");
+    if (minDuration != null) result += ("minDuration=" + minDuration + ", ");
+    if (maxDuration != null) result += ("maxDuration=" + maxDuration + ", ");
+    return result + "limit=" + limit + "}";
   }
 }

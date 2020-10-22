@@ -19,11 +19,13 @@ import java.nio.CharBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CharsetEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Date;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -58,8 +60,8 @@ final class CassandraUtil {
   /**
    * Returns keys that concatenate the serviceName associated with an annotation or tag.
    *
-   * <p>Values over {@link RecyclableBuffers#SHORT_STRING_LENGTH} are not considered. Zipkin's {@link
-   * QueryRequest#annotationQuery()} are equals match. Not all values are lookup values. For
+   * <p>Values over {@link RecyclableBuffers#SHORT_STRING_LENGTH} are not considered. Zipkin's
+   * {@link QueryRequest#annotationQuery()} are equals match. Not all values are lookup values. For
    * example, {@code sql.query} isn't something that is likely to be looked up by value and indexing
    * that could add a potentially kilobyte partition key on {@link Tables#ANNOTATIONS_INDEX}
    *
@@ -119,9 +121,9 @@ final class CassandraUtil {
     TreeMap<BigInteger, Long> sorted = new TreeMap<>(Collections.reverseOrder());
     for (Pair pair : set) {
       BigInteger uncollided =
-          BigInteger.valueOf(pair.right)
-              .multiply(OFFSET)
-              .add(BigInteger.valueOf(RAND.nextInt() & Integer.MAX_VALUE));
+        BigInteger.valueOf(pair.right)
+          .multiply(OFFSET)
+          .add(BigInteger.valueOf(RAND.nextInt() & Integer.MAX_VALUE));
       sorted.put(uncollided, pair.left);
     }
     return new LinkedHashSet<>(sorted.values());
@@ -134,22 +136,20 @@ final class CassandraUtil {
   enum SortTraceIdsByDescTimestamp implements Call.Mapper<Set<Pair>, Set<Long>> {
     INSTANCE;
 
-    @Override
-    public Set<Long> map(Set<Pair> set) {
+    @Override public Set<Long> map(Set<Pair> set) {
       return sortTraceIdsByDescTimestamp(set);
     }
 
-    @Override
-    public String toString() {
+    @Override public String toString() {
       return "SortTraceIdsByDescTimestamp";
     }
   }
 
   @SuppressWarnings("JdkObsolete")
-  static List<Date> getDays(long endTs, @Nullable Long lookback) {
-    List<Date> result = new ArrayList<>();
+  static List<Instant> getDays(long endTs, @Nullable Long lookback) {
+    List<Instant> result = new ArrayList<>();
     for (long epochMillis : DateUtil.epochDays(endTs, lookback)) {
-      result.add(new Date(epochMillis));
+      result.add(Instant.ofEpochMilli(epochMillis));
     }
     return result;
   }

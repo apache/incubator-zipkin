@@ -30,8 +30,8 @@ if [ -z "${MODULE_OPTS+x}" ]; then
 
   # Use main class directly if there are no modules, as it measured 14% faster from JVM running to
   # available verses PropertiesLauncher when using Zipkin was based on Spring Boot 2.1
-  exec java ${JAVA_OPTS} -cp '.:BOOT-INF/lib/*:BOOT-INF/classes' zipkin.server.ZipkinServer
+  exec java ${JAVA_OPTS} -cp '.:BOOT-INF/lib/*:BOOT-INF/classes' zipkin.server.ZipkinServer "$@"
 else
   JAVA_OPTS=${JAVA_OPTS:-"-Xms64m -Xmx64m -XX:+ExitOnOutOfMemoryError"}
-  exec java ${MODULE_OPTS} ${JAVA_OPTS} -cp . org.springframework.boot.loader.PropertiesLauncher
+  exec java ${MODULE_OPTS} ${JAVA_OPTS} -cp . org.springframework.boot.loader.PropertiesLauncher "$@"
 fi

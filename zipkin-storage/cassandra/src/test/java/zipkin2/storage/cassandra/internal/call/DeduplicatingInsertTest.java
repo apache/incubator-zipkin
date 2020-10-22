@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,54 +13,26 @@
  */
 package zipkin2.storage.cassandra.internal.call;
 
+import com.datastax.oss.driver.api.core.cql.AsyncResultSet;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Function;
 import org.junit.Test;
 import zipkin2.Call;
 import zipkin2.Callback;
+import zipkin2.internal.DelayLimiter;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.failBecauseExceptionWasNotThrown;
+import static org.mockito.Mockito.mock;
 
-public class DeduplicatingVoidCallFactoryTest {
+public class DeduplicatingInsertTest {
   List<String> values = new ArrayList<>();
   AtomicReference<String> failValue = new AtomicReference<>();
 
-  class AddToValueCall extends Call.Base<Void> {
-    final String value;
-
-    AddToValueCall(String value) {
-      this.value = value;
-    }
-
-    @Override public Call<Void> clone() {
-      return new AddToValueCall(value);
-    }
-
-    @Override protected Void doExecute() {
-      if (value.equals(failValue.get())) {
-        failValue.set(null);
-        throw new AssertionError();
-      }
-      values.add(value);
-      return null;
-    }
-
-    @Override protected void doEnqueue(Callback<Void> callback) {
-      if (value.equals(failValue.get())) {
-        failValue.set(null);
-        callback.onError(new AssertionError());
-        return;
-      }
-      values.add(value);
-      callback.onSuccess(null);
-    }
-  }
-
-  Function<String, Call<Void>> delegate = AddToValueCall::new;
-  TestDeduplicatingVoidCallFactory callFactory = new TestDeduplicatingVoidCallFactory(delegate);
+  DeduplicatingInsert.Factory<String> callFactory = new Factory();
 
   @Test public void dedupesSameCalls() throws Exception {
     List<Call<Void>> calls = new ArrayList<>();
@@ -97,7 +69,7 @@ public class DeduplicatingVoidCallFactoryTest {
     assertThat(values).containsExactly("foo", "bar");
   }
 
-  @Test public void exceptionsInvalidate_enqueue() throws Exception {
+  @Test public void exceptionsInvalidate_enqueue() {
     List<Call<Void>> calls = new ArrayList<>();
     callFactory.maybeAdd("foo", calls);
     callFactory.maybeAdd("bar", calls);
@@ -145,16 +117,35 @@ public class DeduplicatingVoidCallFactoryTest {
     assertThat(values).containsExactly("bar", "foo");
   }
 
-  static class TestDeduplicatingVoidCallFactory extends DeduplicatingVoidCallFactory<String> {
-    final Function<String, Call<Void>> delegate;
-
-    TestDeduplicatingVoidCallFactory(Function<String, Call<Void>> delegate) {
+  final class Factory extends DeduplicatingInsert.Factory<String> {
+    Factory() {
       super(1000, 1000);
-      this.delegate = delegate;
     }
 
     @Override protected Call<Void> newCall(String string) {
-      return delegate.apply(string);
+      return new TestDeduplicatingInsert(delayLimiter, string);
+    }
+  }
+
+  final class TestDeduplicatingInsert extends DeduplicatingInsert<String> {
+
+    TestDeduplicatingInsert(DelayLimiter<String> delayLimiter, String input) {
+      super(delayLimiter, input);
+    }
+
+    @Override protected CompletionStage<AsyncResultSet> newCompletionStage() {
+      if (input.equals(failValue.get())) {
+        failValue.set(null);
+        CompletableFuture<AsyncResultSet> result = new CompletableFuture<>();
+        result.completeExceptionally(new AssertionError());
+        return result;
+      }
+      values.add(input);
+      return CompletableFuture.completedFuture(mock(AsyncResultSet.class));
+    }
+
+    @Override public Call<Void> clone() {
+      return new TestDeduplicatingInsert(delayLimiter, input);
     }
   }
 }

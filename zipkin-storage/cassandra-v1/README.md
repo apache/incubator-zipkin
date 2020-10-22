@@ -5,16 +5,24 @@ This uses Cassandra 2.2+ features, but is tested against the latest patch of Cas
 
 `CassandraSpanStore.getDependencies()` returns pre-aggregated dependency links (ex via [zipkin-dependencies](https://github.com/openzipkin/zipkin-dependencies)).
 
-The implementation uses the [Datastax Java Driver 3.x](https://github.com/datastax/java-driver).
+The implementation uses the [Datastax Java Driver 4.x](https://github.com/datastax/java-driver).
 
 `zipkin2.storage.cassandra.v1.CassandraStorage.Builder` includes defaults that will
 operate against a local Cassandra installation.
 
 ## Logging
-Queries are logged to the category "com.datastax.driver.core.QueryLogger.NORMAL" when debug or trace
-is enabled via SLF4J. Trace level includes bound values.
+Since the underlying driver uses SLF4J, Zipkin's storage layer also uses
+this (note SLF4J is supported out-of-the-box with no configuration in
+zipkin-server).
 
-See [Logging Query Latencies](http://docs.datastax.com/en/developer/java-driver/3.0/supplemental/manual/logging/#logging-query-latencies) for more details.
+Zipkin's storage layer logs to the category "zipkin2.storage.cassandra",
+but you may wish to see the entire "zipkin2" when troubleshooting.
+
+If you want to see requests and latency, set the logging category
+"com.datastax.oss.driver.internal.core.tracker.RequestLogger" to DEBUG.
+TRACE includes query values.
+
+See [Request Logger](https://docs.datastax.com/en/developer/java-driver/4.9/manual/core/request_tracker/#request-logger) for more details.
 
 ## Testing
 This module conditionally runs integration tests against a local Cassandra instance.
@@ -46,9 +54,8 @@ to reduce load. This is implemented by
 Indexing of traces are optimized by default. This reduces writes to Cassandra at the cost of memory
 needed to cache state. This cache is tunable based on your typical span count.
 
-[Core annotations](../../zipkin/src/main/java/zipkin/Constants.java#L186-L188),
-ex "sr", are not written to `annotations_index`, as they aren't intended for use in user queries.
-Also, binary annotation values longer than 256 characters are not indexed. These optimizations
+Core annotations (ex "sr"), are not written to `annotations_index`, as they aren't intended for use
+in user queries. Also, tag values longer than 256 characters are not indexed. These optimizations
 significantly limit writes per trace.
 
 ### Over-fetching on Trace indexes
@@ -59,7 +66,7 @@ attempts to mitigate redundant data returned from index queries.
 While not supported, here are some notes if you are running the original
 schema on Cassandra 2.1.
 
-### GET /api/v1/traces without the serviceName query will fail
+### GET /api/v2/traces without the serviceName query will fail
 The zipkin-ui always specifies a service name, but the http api permits
 leaving it out. This won't work in Cassandra 2.1
 

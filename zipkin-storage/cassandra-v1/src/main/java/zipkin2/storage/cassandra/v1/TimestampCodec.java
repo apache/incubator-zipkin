@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,36 +13,28 @@
  */
 package zipkin2.storage.cassandra.v1;
 
-import com.datastax.driver.core.ProtocolVersion;
-import com.datastax.driver.core.Row;
-import com.datastax.driver.core.Session;
-import com.datastax.driver.core.TypeCodec;
+import com.datastax.oss.driver.api.core.ProtocolVersion;
+import com.datastax.oss.driver.api.core.cql.Row;
+import com.datastax.oss.driver.api.core.type.codec.TypeCodecs;
 import java.nio.ByteBuffer;
 
 final class TimestampCodec {
-  private final ProtocolVersion protocolVersion;
-
-  TimestampCodec(ProtocolVersion protocolVersion) {
-    this.protocolVersion = protocolVersion;
-  }
-
-  public TimestampCodec(Session session) {
-    this(session.getCluster().getConfiguration().getProtocolOptions().getProtocolVersion());
-  }
+  // This is not read at runtime when deserializing bigint
+  static final ProtocolVersion PROTOCOL_VERSION = ProtocolVersion.V4;
 
   /**
    * Truncates timestamp to milliseconds and converts to binary for using with setBytesUnsafe() to
    * avoid allocating java.util.Date
    */
-  public ByteBuffer serialize(long timestamp) {
-    return TypeCodec.bigint().serialize(timestamp / 1000L, protocolVersion);
+  static ByteBuffer serialize(long timestamp) {
+    return TypeCodecs.BIGINT.encodePrimitive(timestamp / 1000L, PROTOCOL_VERSION);
   }
 
   /**
    * Reads timestamp binary value directly (getBytesUnsafe) to avoid allocating java.util.Date, and
    * converts to microseconds.
    */
-  public long deserialize(Row row, String name) {
-    return 1000L * TypeCodec.bigint().deserialize(row.getBytesUnsafe(name), protocolVersion);
+  static long deserialize(Row row, int i) {
+    return 1000L * TypeCodecs.BIGINT.decodePrimitive(row.getBytesUnsafe(i), PROTOCOL_VERSION);
   }
 }

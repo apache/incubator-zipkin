@@ -13,37 +13,35 @@
  */
 package zipkin2.storage.cassandra.v1;
 
-import com.datastax.driver.core.PreparedStatement;
-import com.datastax.driver.core.ResultSet;
-import com.datastax.driver.core.ResultSetFuture;
-import com.datastax.driver.core.Session;
-import com.datastax.driver.core.querybuilder.QueryBuilder;
+import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.cql.AsyncResultSet;
+import com.datastax.oss.driver.api.core.cql.PreparedStatement;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CompletionStage;
 import zipkin2.Call;
 import zipkin2.storage.cassandra.internal.call.DistinctSortedStrings;
 import zipkin2.storage.cassandra.internal.call.ResultSetFutureCall;
 
-final class SelectRemoteServiceNames extends ResultSetFutureCall<ResultSet> {
+import static zipkin2.storage.cassandra.v1.Tables.REMOTE_SERVICE_NAMES;
 
-  static class Factory {
-    final Session session;
+final class SelectRemoteServiceNames extends ResultSetFutureCall<AsyncResultSet> {
+  static final class Factory {
+    final CqlSession session;
     final PreparedStatement preparedStatement;
-    final DistinctSortedStrings remoteServiceNames =
-      new DistinctSortedStrings("remote_service_name");
 
-    Factory(Session session) {
+    Factory(CqlSession session) {
       this.session = session;
-      this.preparedStatement = session.prepare(QueryBuilder.select("remote_service_name")
-        .from(Tables.REMOTE_SERVICE_NAMES)
-        .where(QueryBuilder.eq("service_name", QueryBuilder.bindMarker("service_name")))
-        .limit(QueryBuilder.bindMarker("limit_")));
+      this.preparedStatement = session.prepare("SELECT remote_service_name"
+        + " FROM " + REMOTE_SERVICE_NAMES
+        + " WHERE service_name=?"
+        + " LIMIT " + 1000);
     }
 
     Call<List<String>> create(String serviceName) {
       if (serviceName == null || serviceName.isEmpty()) return Call.emptyList();
       String service = serviceName.toLowerCase(Locale.ROOT); // service names are always lowercase!
-      return new SelectRemoteServiceNames(this, service).flatMap(remoteServiceNames);
+      return new SelectRemoteServiceNames(this, service).flatMap(DistinctSortedStrings.get());
     }
   }
 
@@ -55,15 +53,12 @@ final class SelectRemoteServiceNames extends ResultSetFutureCall<ResultSet> {
     this.service_name = service_name;
   }
 
-  @Override
-  protected ResultSetFuture newFuture() {
-    return factory.session.executeAsync(factory.preparedStatement.bind()
-      .setString("service_name", service_name)
-      // no one is ever going to browse so many remote service names
-      .setInt("limit_", 1000));
+  @Override protected CompletionStage<AsyncResultSet> newCompletionStage() {
+    return factory.session.executeAsync(factory.preparedStatement.boundStatementBuilder()
+      .setString(0, service_name).build());
   }
 
-  @Override public ResultSet map(ResultSet input) {
+  @Override public AsyncResultSet map(AsyncResultSet input) {
     return input;
   }
 

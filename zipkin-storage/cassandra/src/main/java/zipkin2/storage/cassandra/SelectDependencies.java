@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,15 +13,14 @@
  */
 package zipkin2.storage.cassandra;
 
-import com.datastax.driver.core.LocalDate;
-import com.datastax.driver.core.PreparedStatement;
-import com.datastax.driver.core.ResultSet;
-import com.datastax.driver.core.ResultSetFuture;
-import com.datastax.driver.core.Row;
-import com.datastax.driver.core.Session;
-import com.datastax.driver.core.querybuilder.QueryBuilder;
+import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.cql.AsyncResultSet;
+import com.datastax.oss.driver.api.core.cql.PreparedStatement;
+import com.datastax.oss.driver.api.core.cql.Row;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletionStage;
 import zipkin2.Call;
 import zipkin2.DependencyLink;
 import zipkin2.internal.DependencyLinker;
@@ -30,18 +29,15 @@ import zipkin2.storage.cassandra.internal.call.ResultSetFutureCall;
 import static zipkin2.storage.cassandra.Schema.TABLE_DEPENDENCY;
 
 final class SelectDependencies extends ResultSetFutureCall<List<DependencyLink>> {
-
-  static class Factory {
-    final Session session;
+  static final class Factory {
+    final CqlSession session;
     final PreparedStatement preparedStatement;
 
-    Factory(Session session) {
+    Factory(CqlSession session) {
       this.session = session;
-      this.preparedStatement =
-          session.prepare(
-              QueryBuilder.select("parent", "child", "errors", "calls")
-                  .from(TABLE_DEPENDENCY)
-                  .where(QueryBuilder.in("day", QueryBuilder.bindMarker("days"))));
+      this.preparedStatement = session.prepare("SELECT parent,child,errors,calls"
+        + " FROM " + TABLE_DEPENDENCY
+        + " WHERE day IN ?");
     }
 
     Call<List<DependencyLink>> create(long endTs, long lookback) {
@@ -58,32 +54,28 @@ final class SelectDependencies extends ResultSetFutureCall<List<DependencyLink>>
     this.days = days;
   }
 
-  @Override
-  protected ResultSetFuture newFuture() {
-    return factory.session.executeAsync(factory.preparedStatement.bind().setList("days", days));
+  @Override protected CompletionStage<AsyncResultSet> newCompletionStage() {
+    return factory.session.executeAsync(factory.preparedStatement.boundStatementBuilder()
+      .setList(0, days, LocalDate.class).build());
   }
 
-  @Override
-  public String toString() {
+  @Override public String toString() {
     return "SelectDependencies{days=" + days + "}";
   }
 
-  @Override
-  public SelectDependencies clone() {
+  @Override public SelectDependencies clone() {
     return new SelectDependencies(factory, days);
   }
 
-  @Override
-  public List<DependencyLink> map(ResultSet rs) {
+  @Override public List<DependencyLink> map(AsyncResultSet rs) {
     List<DependencyLink> unmerged = new ArrayList<>();
-    for (Row row : rs) {
-      unmerged.add(
-          DependencyLink.newBuilder()
-              .parent(row.getString("parent"))
-              .child(row.getString("child"))
-              .errorCount(row.getLong("errors"))
-              .callCount(row.getLong("calls"))
-              .build());
+    for (Row row : rs.currentPage()) {
+      unmerged.add(DependencyLink.newBuilder()
+        .parent(row.getString("parent"))
+        .child(row.getString("child"))
+        .errorCount(row.getLong("errors"))
+        .callCount(row.getLong("calls"))
+        .build());
     }
     return DependencyLinker.merge(unmerged);
   }

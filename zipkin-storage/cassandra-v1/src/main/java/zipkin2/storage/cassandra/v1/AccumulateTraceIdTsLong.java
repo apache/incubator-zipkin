@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,7 +13,7 @@
  */
 package zipkin2.storage.cassandra.v1;
 
-import com.datastax.driver.core.Row;
+import com.datastax.oss.driver.api.core.cql.Row;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.function.BiConsumer;
@@ -21,25 +21,25 @@ import java.util.function.Supplier;
 import zipkin2.storage.cassandra.internal.call.AccumulateAllResults;
 
 final class AccumulateTraceIdTsLong extends AccumulateAllResults<Set<Pair>> {
-  final TimestampCodec timestampCodec;
+  static final AccumulateAllResults<Set<Pair>> INSTANCE = new AccumulateTraceIdTsLong();
 
-  AccumulateTraceIdTsLong(TimestampCodec timestampCodec) {
-    this.timestampCodec = timestampCodec;
+  static AccumulateAllResults<Set<Pair>> get() {
+    return INSTANCE;
   }
 
-  @Override
-  protected Supplier<Set<Pair>> supplier() {
+  @Override protected Supplier<Set<Pair>> supplier() {
     return LinkedHashSet::new; // because results are not distinct
   }
 
-  @Override
-  protected BiConsumer<Row, Set<Pair>> accumulator() {
+  @Override protected BiConsumer<Row, Set<Pair>> accumulator() {
     return (row, result) ->
-        result.add(new Pair(row.getLong("trace_id"), timestampCodec.deserialize(row, "ts")));
+      result.add(new Pair(row.getLong(0), TimestampCodec.deserialize(row, 1)));
   }
 
-  @Override
-  public String toString() {
+  @Override public String toString() {
     return "AccumulateTraceIdTsLong{}";
+  }
+
+  private AccumulateTraceIdTsLong() {
   }
 }

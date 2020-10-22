@@ -14,7 +14,9 @@
     the License.
 
 -->
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
   <parent>
@@ -29,8 +31,10 @@
   <properties>
     <main.basedir>${project.basedir}/../..</main.basedir>
 
-    <!-- error-prone doesn't like generated code and it wants you to depend on guava! -->
-    <errorprone.args>-XepDisableWarningsInGeneratedCode -Xep:AutoValueImmutableFields:OFF -Xep:ExtendsAutoValue:OFF -Xep:AutoValueSubclassLeaked:OFF</errorprone.args>
+    <!-- CheckReturnValue:OFF as it is used on some types that do not require it
+         https://groups.google.com/a/lists.datastax.com/g/java-driver-user/c/YbXjSoNV6Ns/m/U9w-HccWBgAJ -->
+    <!-- AutoValueImmutableFields:OFF because error-prone wants InsertSpan to depend on guava! -->
+    <errorprone.args>-Xep:CheckReturnValue:OFF -Xep:AutoValueImmutableFields:OFF</errorprone.args>
   </properties>
 
   <dependencies>
@@ -45,15 +49,22 @@
     </dependency>
 
     <dependency>
-      <groupId>com.datastax.cassandra</groupId>
-      <artifactId>cassandra-driver-core</artifactId>
-      <version>${cassandra-driver-core.version}</version>
-    </dependency>
-
-    <dependency>
-      <groupId>com.datastax.cassandra</groupId>
-      <artifactId>cassandra-driver-mapping</artifactId>
-      <version>${cassandra-driver-core.version}</version>
+      <groupId>com.datastax.oss</groupId>
+      <artifactId>java-driver-core</artifactId>
+      <version>${java-driver.version}</version>
+      <!-- Exclude unused graph and geo dependencies -->
+      <exclusions>
+        <exclusion>
+          <groupId>com.esri.geometry</groupId>
+          <artifactId>*</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.apache.tinkerpop</groupId>
+          <artifactId>*</artifactId>
+        </exclusion>
+        <!-- We retain reactivestreams even though we don't use it because
+             Mockito dies trying to mock CqlSession without it. -->
+      </exclusions>
     </dependency>
 
     <!-- To test nuance of load balancing behavior -->

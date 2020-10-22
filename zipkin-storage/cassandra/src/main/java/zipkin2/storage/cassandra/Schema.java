@@ -13,13 +13,12 @@
  */
 package zipkin2.storage.cassandra;
 
-import com.datastax.driver.core.Cluster;
-import com.datastax.driver.core.ConsistencyLevel;
-import com.datastax.driver.core.Host;
-import com.datastax.driver.core.KeyspaceMetadata;
-import com.datastax.driver.core.Session;
-import com.datastax.driver.core.VersionNumber;
+import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.Version;
+import com.datastax.oss.driver.api.core.metadata.Node;
+import com.datastax.oss.driver.api.core.metadata.schema.KeyspaceMetadata;
 import java.util.Map;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zipkin2.internal.Nullable;
@@ -43,28 +42,15 @@ final class Schema {
   static final String UPGRADE_1 = "/zipkin2-schema-upgrade-1.cql";
   static final String UPGRADE_2 = "/zipkin2-schema-upgrade-2.cql";
 
-  Schema() {
-  }
-
-  static Metadata readMetadata(Session session) {
-    KeyspaceMetadata keyspaceMetadata =
-      ensureKeyspaceMetadata(session, session.getLoggedKeyspace());
+  static Metadata readMetadata(CqlSession session, String keyspace) {
+    KeyspaceMetadata keyspaceMetadata = ensureKeyspaceMetadata(session, keyspace);
 
     Map<String, String> replication = keyspaceMetadata.getReplication();
     if ("SimpleStrategy".equals(replication.get("class"))) {
       if ("1".equals(replication.get("replication_factor"))) {
         LOG.warn("running with RF=1, this is not suitable for production. Optimal is 3+");
       }
-
-      ConsistencyLevel cl =
-        session.getCluster().getConfiguration().getQueryOptions().getConsistencyLevel();
-
-      if (cl != ConsistencyLevel.ONE) {
-        throw new IllegalArgumentException("Do not define `local_dc` and use SimpleStrategy");
-      }
     }
-    String compactionClass =
-      keyspaceMetadata.getTable("span").getOptions().getCompaction().get("class");
 
     boolean hasAutocompleteTags = hasUpgrade1_autocompleteTags(keyspaceMetadata);
     if (!hasAutocompleteTags) {
@@ -80,50 +66,46 @@ final class Schema {
         UPGRADE_2);
     }
 
-    return new Metadata(compactionClass, hasAutocompleteTags, hasRemoteService);
+    return new Metadata(hasAutocompleteTags, hasRemoteService);
   }
 
   static final class Metadata {
-    final String compactionClass;
     final boolean hasAutocompleteTags, hasRemoteService;
 
-    Metadata(String compactionClass, boolean hasAutocompleteTags,
-      boolean hasRemoteService) {
-      this.compactionClass = compactionClass;
+    Metadata(boolean hasAutocompleteTags, boolean hasRemoteService) {
       this.hasAutocompleteTags = hasAutocompleteTags;
       this.hasRemoteService = hasRemoteService;
     }
   }
 
-  static KeyspaceMetadata ensureKeyspaceMetadata(Session session, String keyspace) {
+  static KeyspaceMetadata ensureKeyspaceMetadata(CqlSession session, String keyspace) {
     KeyspaceMetadata keyspaceMetadata = getKeyspaceMetadata(session, keyspace);
     if (keyspaceMetadata == null) {
       throw new IllegalStateException(
         String.format(
           "Cannot read keyspace metadata for keyspace: %s and cluster: %s",
-          keyspace, session.getCluster().getClusterName()));
+          keyspace, session.getMetadata().getClusterName()));
     }
     return keyspaceMetadata;
   }
 
-  @Nullable static KeyspaceMetadata getKeyspaceMetadata(Session session, String keyspace) {
-    Cluster cluster = session.getCluster();
-    com.datastax.driver.core.Metadata metadata = cluster.getMetadata();
-    for (Host node : metadata.getAllHosts()) {
-      VersionNumber version = node.getCassandraVersion();
-      if (version == null) throw new RuntimeException("node had no version: " + node);
-      if (VersionNumber.parse("3.11.3").compareTo(version) > 0) {
+  @Nullable static KeyspaceMetadata getKeyspaceMetadata(CqlSession session, String keyspace) {
+    com.datastax.oss.driver.api.core.metadata.Metadata metadata = session.getMetadata();
+    for (Map.Entry<UUID, Node> entry : metadata.getNodes().entrySet()) {
+      Version version = entry.getValue().getCassandraVersion();
+      if (version == null) throw new RuntimeException("node had no version: " + entry.getValue());
+      if (Version.parse("3.11.3").compareTo(version) > 0) {
         throw new RuntimeException(String.format(
-          "Host %s is running Cassandra %s, but minimum version is 3.11.3",
-          node.getHostId(), node.getCassandraVersion()));
+          "Node %s is running Cassandra %s, but minimum version is 3.11.3",
+          entry.getKey(), entry.getValue().getCassandraVersion()));
       }
     }
-    return metadata.getKeyspace(keyspace);
+    return metadata.getKeyspace(keyspace).orElse(null);
   }
 
-  static KeyspaceMetadata ensureExists(String keyspace, boolean searchEnabled, Session session) {
+  static KeyspaceMetadata ensureExists(String keyspace, boolean searchEnabled, CqlSession session) {
     KeyspaceMetadata result = getKeyspaceMetadata(session, keyspace);
-    if (result == null || result.getTable(Schema.TABLE_SPAN) == null) {
+    if (result == null || !result.getTable(Schema.TABLE_SPAN).isPresent()) {
       LOG.info("Installing schema {} for keyspace {}", SCHEMA_RESOURCE, keyspace);
       applyCqlFile(keyspace, session, SCHEMA_RESOURCE);
       if (searchEnabled) {
@@ -133,11 +115,11 @@ final class Schema {
       // refresh metadata since we've installed the schema
       result = ensureKeyspaceMetadata(session, keyspace);
     }
-    if (!hasUpgrade1_autocompleteTags(result)) {
+    if (searchEnabled && !hasUpgrade1_autocompleteTags(result)) {
       LOG.info("Upgrading schema {}", UPGRADE_1);
       applyCqlFile(keyspace, session, UPGRADE_1);
     }
-    if (!hasUpgrade2_remoteService(result)) {
+    if (searchEnabled && !hasUpgrade2_remoteService(result)) {
       LOG.info("Upgrading schema {}", UPGRADE_2);
       applyCqlFile(keyspace, session, UPGRADE_2);
     }
@@ -145,19 +127,22 @@ final class Schema {
   }
 
   static boolean hasUpgrade1_autocompleteTags(KeyspaceMetadata keyspaceMetadata) {
-    return keyspaceMetadata.getTable(TABLE_AUTOCOMPLETE_TAGS) != null;
+    return keyspaceMetadata.getTable(TABLE_AUTOCOMPLETE_TAGS).isPresent();
   }
 
   static boolean hasUpgrade2_remoteService(KeyspaceMetadata keyspaceMetadata) {
-    return keyspaceMetadata.getTable(TABLE_SERVICE_REMOTE_SERVICES) != null;
+    return keyspaceMetadata.getTable(TABLE_SERVICE_REMOTE_SERVICES).isPresent();
   }
 
-  static void applyCqlFile(String keyspace, Session session, String resource) {
+  static void applyCqlFile(String keyspace, CqlSession session, String resource) {
     for (String cmd : resourceToString(resource).split(";", 100)) {
       cmd = cmd.trim().replace(" " + DEFAULT_KEYSPACE, " " + keyspace);
       if (!cmd.isEmpty()) {
         session.execute(cmd);
       }
     }
+  }
+
+  Schema() {
   }
 }

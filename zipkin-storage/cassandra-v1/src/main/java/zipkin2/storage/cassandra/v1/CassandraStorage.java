@@ -13,31 +13,34 @@
  */
 package zipkin2.storage.cassandra.v1;
 
-import com.datastax.driver.core.Session;
-import java.util.ArrayList;
-import java.util.List;
+import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.auth.AuthProvider;
+import com.datastax.oss.driver.api.core.config.DriverOption;
+import com.datastax.oss.driver.internal.core.auth.ProgrammaticPlainTextAuthProvider;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import zipkin2.Call;
 import zipkin2.CheckResult;
-import zipkin2.internal.Nullable;
 import zipkin2.storage.AutocompleteTags;
-import zipkin2.storage.QueryRequest;
 import zipkin2.storage.ServiceAndSpanNames;
 import zipkin2.storage.SpanConsumer;
 import zipkin2.storage.SpanStore;
 import zipkin2.storage.StorageComponent;
 import zipkin2.storage.Traces;
-import zipkin2.storage.cassandra.internal.call.DeduplicatingVoidCallFactory;
+import zipkin2.storage.cassandra.internal.CassandraStorageBuilder;
+import zipkin2.storage.cassandra.internal.call.DeduplicatingInsert;
 import zipkin2.storage.cassandra.internal.call.ResultSetFutureCall;
+import zipkin2.storage.cassandra.v1.Schema.Metadata;
 
 /**
  * CQL3 implementation of zipkin storage.
  *
- * <p>Queries are logged to the category "com.datastax.driver.core.QueryLogger" when debug or trace
- * is enabled via SLF4J. Trace level includes bound values.
+ * <p>Queries are logged to the category "com.datastax.oss.driver.api.core.cql.QueryLogger" when
+ * debug or trace is enabled via SLF4J. Trace level includes bound values.
  *
- * <p>Redundant requests to store service or span names are ignored for an hour to reduce load. This
- * feature is implemented by {@link DeduplicatingVoidCallFactory}.
+ * <p>Redundant requests to store service or span names are ignored for an hour to reduce load.
+ * This feature is implemented by {@link DeduplicatingInsert}.
  *
  * <p>Schema is installed by default from "/cassandra-schema.cql"
  */
@@ -47,68 +50,31 @@ public class CassandraStorage extends StorageComponent { // not final for mockin
     return new Builder();
   }
 
-  public static final class Builder extends StorageComponent.Builder {
-    boolean strictTraceId = true, searchEnabled = true;
-    String keyspace = "zipkin";
-    String contactPoints = "localhost";
-    String localDc;
-    int maxConnections = 8;
-    boolean ensureSchema = true;
-    boolean useSsl = false;
-    String username;
-    String password;
-    int maxTraceCols = 100000;
-    int indexCacheMax = 100000;
+  public static final class Builder extends CassandraStorageBuilder<Builder> {
+    SessionFactory sessionFactory = new SessionFactory.Default();
+    int indexCacheMax = 100_000;
     int indexCacheTtl = 60;
-    int indexFetchMultiplier = 3;
-    List<String> autocompleteKeys = new ArrayList<>();
-    int autocompleteTtl = (int) TimeUnit.HOURS.toMillis(1);
-    int autocompleteCardinality = 5 * 4000; // Ex. 5 site tags with cardinality 4000 each
-
-    /**
-     * Used to avoid hot spots when writing indexes used to query by service name or annotation.
-     *
-     * <p>This controls the amount of buckets, or partitions writes to {@code service_name_index}
-     * and {@code annotations_index}. This must be the same for all query servers, and has
-     * historically always been 10.
-     *
-     * <p>See https://github.com/openzipkin/zipkin/issues/623 for further explanation
-     */
-    int bucketCount = 10;
-
     int spanTtl = (int) TimeUnit.DAYS.toSeconds(7);
     int indexTtl = (int) TimeUnit.DAYS.toSeconds(3);
-    SessionFactory sessionFactory = new SessionFactory.Default();
 
-    /** {@inheritDoc} */
-    @Override
-    public Builder strictTraceId(boolean strictTraceId) {
-      this.strictTraceId = strictTraceId;
-      return this;
+    Builder() {
+      super("zipkin");
     }
 
-    @Override
-    public Builder searchEnabled(boolean searchEnabled) {
-      this.searchEnabled = searchEnabled;
-      return this;
+    /** Keyspace to store span and index data. Defaults to "zipkin" */
+    @Override public Builder keyspace(String keyspace) {
+      return super.keyspace(keyspace);
     }
 
-    @Override public Builder autocompleteKeys(List<String> keys) {
-      if (keys == null) throw new NullPointerException("keys == null");
-      this.autocompleteKeys = keys;
-      return this;
-    }
-
-    @Override public Builder autocompleteTtl(int autocompleteTtl) {
-      if (autocompleteTtl <= 0) throw new IllegalArgumentException("autocompleteTtl <= 0");
-      this.autocompleteTtl = autocompleteTtl;
-      return this;
-    }
-
-    @Override public Builder autocompleteCardinality(int autocompleteCardinality) {
-      if (autocompleteCardinality <= 0) throw new IllegalArgumentException("autocompleteCardinality <= 0");
-      this.autocompleteCardinality = autocompleteCardinality;
-      return this;
+    /**
+     * Ensures that schema exists, if enabled tries to execute:
+     * <ol>
+     *   <li>io.zipkin.zipkin2:zipkin-storage-cassandra-v1/cassandra-schema.cql</li>
+     * </ol>
+     * Defaults to true.
+     */
+    @Override public Builder ensureSchema(boolean ensureSchema) {
+      return super.ensureSchema(ensureSchema);
     }
 
     /** Override to control how sessions are created. */
@@ -118,83 +84,12 @@ public class CassandraStorage extends StorageComponent { // not final for mockin
       return this;
     }
 
-    /** Keyspace to store span and index data. Defaults to "zipkin" */
-    public Builder keyspace(String keyspace) {
-      if (keyspace == null) throw new NullPointerException("keyspace == null");
-      this.keyspace = keyspace;
-      return this;
-    }
-
-    /**
-     * Comma separated list of host addresses part of Cassandra cluster. You can also specify a
-     * custom port with 'host:port'. Defaults to localhost on port 9042 *
-     */
-    public Builder contactPoints(String contactPoints) {
-      if (contactPoints == null) throw new NullPointerException("contactPoints == null");
-      this.contactPoints = contactPoints;
-      return this;
-    }
-
-    /**
-     * Name of the datacenter that will be considered "local" for latency load balancing. When
-     * unset, load-balancing is round-robin.
-     */
-    public Builder localDc(@Nullable String localDc) {
-      this.localDc = localDc;
-      return this;
-    }
-
-    /** Max pooled connections per datacenter-local host. Defaults to 8 */
-    public Builder maxConnections(int maxConnections) {
-      this.maxConnections = maxConnections;
-      return this;
-    }
-
-    /**
-     * Ensures that schema exists, if enabled tries to execute script
-     * io.zipkin:zipkin-cassandra-core/cassandra-schema.cql. Defaults to true.
-     */
-    public Builder ensureSchema(boolean ensureSchema) {
-      this.ensureSchema = ensureSchema;
-      return this;
-    }
-
-    /** Use ssl for connection. Defaults to false. */
-    public Builder useSsl(boolean useSsl) {
-      this.useSsl = useSsl;
-      return this;
-    }
-
-    /** Will throw an exception on startup if authentication fails. No default. */
-    public Builder username(@Nullable String username) {
-      this.username = username;
-      return this;
-    }
-
-    /** Will throw an exception on startup if authentication fails. No default. */
-    public Builder password(@Nullable String password) {
-      this.password = password;
-      return this;
-    }
-
-    /**
-     * Spans have multiple values for the same id. For example, a client and server contribute to
-     * the same span id. When searching for spans by id, the amount of results may be larger than
-     * the ids. This defines a threshold which accommodates this situation, without looking for an
-     * unbounded number of results.
-     */
-    public Builder maxTraceCols(int maxTraceCols) {
-      this.maxTraceCols = maxTraceCols;
-      return this;
-    }
-
     /**
      * Time-to-live in seconds for span data. Defaults to 604800 (7 days)
      *
      * @deprecated current schema uses default ttls. This parameter will be removed in Zipkin 2
      */
-    @Deprecated
-    public Builder spanTtl(int spanTtl) {
+    @Deprecated public Builder spanTtl(int spanTtl) {
       this.spanTtl = spanTtl;
       return this;
     }
@@ -204,8 +99,7 @@ public class CassandraStorage extends StorageComponent { // not final for mockin
      *
      * @deprecated current schema uses default ttls. This parameter will be removed in Zipkin 2
      */
-    @Deprecated
-    public Builder indexTtl(int indexTtl) {
+    @Deprecated public Builder indexTtl(int indexTtl) {
       this.indexTtl = indexTtl;
       return this;
     }
@@ -244,48 +138,73 @@ public class CassandraStorage extends StorageComponent { // not final for mockin
       return this;
     }
 
-    /**
-     * How many more index rows to fetch than the user-supplied query limit. Defaults to 3.
-     *
-     * <p>Backend requests will request {@link QueryRequest#limit()} times this factor rows from
-     * Cassandra indexes in attempts to return {@link QueryRequest#limit()} traces.
-     *
-     * <p>Indexing in cassandra will usually have more rows than trace identifiers due to factors
-     * including table design and collection implementation. As there's no way to DISTINCT out
-     * duplicates server-side, this over-fetches client-side when {@code indexFetchMultiplier} &gt;
-     * 1.
-     */
-    public Builder indexFetchMultiplier(int indexFetchMultiplier) {
-      this.indexFetchMultiplier = indexFetchMultiplier;
-      return this;
+    @Override public CassandraStorage build() {
+      AuthProvider authProvider = null;
+      if (username != null) {
+        authProvider = new ProgrammaticPlainTextAuthProvider(username, password);
+      }
+      return new CassandraStorage(strictTraceId, searchEnabled, autocompleteKeys, autocompleteTtl,
+        autocompleteCardinality, contactPoints, localDc, poolingOptions(), authProvider, useSsl,
+        sessionFactory, keyspace, ensureSchema, maxTraceCols, indexFetchMultiplier,
+        indexCacheMax, indexCacheTtl, spanTtl, indexTtl // << cassandra v1 only
+      );
     }
-
-    @Override
-    public CassandraStorage build() {
-      return new CassandraStorage(this);
-    }
-
-    Builder() {}
   }
 
-  final int maxTraceCols;
-  @Deprecated final int indexTtl, spanTtl;
-  final int bucketCount;
-  final String contactPoints;
-  final int maxConnections;
-  final String localDc;
-  final String username;
-  final String password;
-  final boolean ensureSchema;
+  final boolean strictTraceId, searchEnabled;
+  final Set<String> autocompleteKeys;
+  final int autocompleteTtl, autocompleteCardinality;
+
+  final String contactPoints, localDc;
+  final Map<DriverOption, Integer> poolingOptions;
+  final AuthProvider authProvider;
   final boolean useSsl;
   final String keyspace;
+  final boolean ensureSchema;
+
+  final int maxTraceCols, indexFetchMultiplier;
+
   final int indexCacheMax, indexCacheTtl;
-  final int indexFetchMultiplier;
-  final boolean strictTraceId, searchEnabled;
+
+  final int spanTtl, indexTtl;
+
   final LazySession session;
-  final List<String> autocompleteKeys;
-  final int autocompleteTtl;
-  final int autocompleteCardinality;
+
+  CassandraStorage(boolean strictTraceId, boolean searchEnabled, Set<String> autocompleteKeys,
+    int autocompleteTtl, int autocompleteCardinality, String contactPoints, String localDc,
+    Map<DriverOption, Integer> poolingOptions, AuthProvider authProvider, boolean useSsl,
+    SessionFactory sessionFactory, String keyspace, boolean ensureSchema, int maxTraceCols,
+    int indexFetchMultiplier, int indexCacheMax, int indexCacheTtl, int spanTtl, int indexTtl) {
+    // Assign generic configuration for all storage components
+    this.strictTraceId = strictTraceId;
+    this.searchEnabled = searchEnabled;
+    this.autocompleteKeys = autocompleteKeys;
+    this.autocompleteTtl = autocompleteTtl;
+    this.autocompleteCardinality = autocompleteCardinality;
+
+    // Assign configuration used to create a session
+    this.contactPoints = contactPoints;
+    this.localDc = localDc;
+    this.poolingOptions = poolingOptions;
+    this.authProvider = authProvider;
+    this.useSsl = useSsl;
+    this.ensureSchema = ensureSchema;
+    this.keyspace = keyspace;
+
+    // Assign configuration used to control queries
+    this.maxTraceCols = maxTraceCols;
+    this.indexFetchMultiplier = indexFetchMultiplier;
+
+    // Client-side indexes use these properties
+    this.indexCacheMax = indexCacheMax;
+    this.indexCacheTtl = indexCacheTtl;
+
+    // Deprecated index TTL modifiers
+    this.spanTtl = spanTtl;
+    this.indexTtl = indexTtl;
+
+    this.session = new LazySession(sessionFactory, this);
+  }
 
   /** close is typically called from a different thread */
   volatile boolean closeCalled;
@@ -294,36 +213,12 @@ public class CassandraStorage extends StorageComponent { // not final for mockin
   volatile CassandraSpanStore spanStore;
   volatile CassandraAutocompleteTags tagStore;
 
-  CassandraStorage(Builder b) {
-    this.contactPoints = b.contactPoints;
-    this.maxConnections = b.maxConnections;
-    this.localDc = b.localDc;
-    this.username = b.username;
-    this.password = b.password;
-    this.ensureSchema = b.ensureSchema;
-    this.useSsl = b.useSsl;
-    this.keyspace = b.keyspace;
-    this.maxTraceCols = b.maxTraceCols;
-    this.strictTraceId = b.strictTraceId;
-    this.searchEnabled = b.searchEnabled;
-    this.indexTtl = b.indexTtl;
-    this.spanTtl = b.spanTtl;
-    this.bucketCount = b.bucketCount;
-    this.session = new LazySession(b.sessionFactory, this);
-    this.indexCacheMax = b.indexCacheMax;
-    this.indexCacheTtl = b.indexCacheTtl;
-    this.indexFetchMultiplier = b.indexFetchMultiplier;
-    this.autocompleteKeys = b.autocompleteKeys;
-    this.autocompleteTtl = b.autocompleteTtl;
-    this.autocompleteCardinality = b.autocompleteCardinality;
-  }
-
   /** Lazy initializes or returns the session in use by this storage component. */
-  Session session() {
+  CqlSession session() {
     return session.get();
   }
 
-  Schema.Metadata metadata() {
+  Metadata metadata() {
     return session.metadata();
   }
 
@@ -331,9 +226,7 @@ public class CassandraStorage extends StorageComponent { // not final for mockin
   @Override public SpanStore spanStore() {
     if (spanStore == null) {
       synchronized (this) {
-        if (spanStore == null) {
-          spanStore = new CassandraSpanStore(this);
-        }
+        if (spanStore == null) spanStore = new CassandraSpanStore(this);
       }
     }
     return spanStore;
@@ -358,9 +251,8 @@ public class CassandraStorage extends StorageComponent { // not final for mockin
     return tagStore;
   }
 
-  /** {@inheritDoc} Memoized in order to avoid re-preparing statements */
-  @Override
-  public SpanConsumer spanConsumer() {
+  // Memoized in order to avoid re-preparing statements
+  @Override public SpanConsumer spanConsumer() {
     if (spanConsumer == null) {
       synchronized (this) {
         if (spanConsumer == null) {
@@ -379,8 +271,7 @@ public class CassandraStorage extends StorageComponent { // not final for mockin
     return "CassandraStorage{contactPoints=" + contactPoints + ", keyspace=" + keyspace + "}";
   }
 
-  @Override
-  public CheckResult check() {
+  @Override public CheckResult check() {
     if (closeCalled) throw new IllegalStateException("closed");
     try {
       session.healthCheck();
@@ -391,12 +282,9 @@ public class CassandraStorage extends StorageComponent { // not final for mockin
     return CheckResult.OK;
   }
 
-  @Override
-  public void close() {
+  @Override public void close() {
     if (closeCalled) return;
     session.close();
-    CassandraSpanConsumer maybeConsumer = spanConsumer;
-    if (maybeConsumer != null) maybeConsumer.clear();
     closeCalled = true;
   }
 }

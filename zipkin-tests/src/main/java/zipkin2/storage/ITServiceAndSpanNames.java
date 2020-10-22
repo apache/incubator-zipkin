@@ -13,17 +13,19 @@
  */
 package zipkin2.storage;
 
-import java.io.IOException;
 import java.util.List;
+import java.util.Locale;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 import zipkin2.Endpoint;
 import zipkin2.Span;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static zipkin2.TestObjects.CLIENT_SPAN;
-import static zipkin2.TestObjects.FRONTEND;
+import static zipkin2.TestObjects.BACKEND;
+import static zipkin2.TestObjects.newClientSpan;
+import static zipkin2.TestObjects.spanBuilder;
 
 /**
  * Base test for {@link ServiceAndSpanNames}.
@@ -36,130 +38,165 @@ public abstract class ITServiceAndSpanNames<T extends StorageComponent> extends 
     // Defaults are fine.
   }
 
-  @Test protected void getLocalServiceNames_includesLocalServiceName() throws Exception {
+  @Test
+  protected void getLocalServiceNames_includesLocalServiceName(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span clientSpan = newClientSpan(testSuffix);
+
     assertThat(names().getServiceNames().execute())
       .isEmpty();
 
-    accept(CLIENT_SPAN);
+    accept(clientSpan);
 
     assertThat(names().getServiceNames().execute())
-      .containsOnly("frontend");
+      .containsOnly(clientSpan.localServiceName());
   }
 
-  @Test protected void getLocalServiceNames_noServiceName() throws IOException {
-    accept(Span.newBuilder().traceId("a").id("a").build());
+  @Test protected void getLocalServiceNames_noServiceName(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    accept(spanBuilder(testSuffix).localEndpoint(null).build());
 
     assertThat(names().getServiceNames().execute()).isEmpty();
   }
 
-  @Test protected void getRemoteServiceNames() throws Exception {
-    assertThat(names().getRemoteServiceNames("frontend").execute())
+  @Test protected void getRemoteServiceNames(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span clientSpan = newClientSpan(testSuffix);
+
+    assertThat(names().getRemoteServiceNames(clientSpan.localServiceName()).execute())
       .isEmpty();
 
-    accept(CLIENT_SPAN);
+    accept(clientSpan);
 
-    assertThat(names().getRemoteServiceNames("frontend" + 1).execute())
+    assertThat(names().getRemoteServiceNames(clientSpan.localServiceName() + 1).execute())
       .isEmpty();
 
-    assertThat(names().getRemoteServiceNames("frontend").execute())
-      .contains(CLIENT_SPAN.remoteServiceName());
+    assertThat(names().getRemoteServiceNames(clientSpan.localServiceName()).execute())
+      .contains(clientSpan.remoteServiceName());
   }
 
-  @Test protected void getRemoteServiceNames_allReturned() throws IOException {
+  @Test protected void getRemoteServiceNames_allReturned(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
     // Assure a default store limit isn't hit by assuming if 50 are returned, all are returned
     List<Span> spans = IntStream.rangeClosed(0, 50)
       .mapToObj(i -> {
         String suffix = i < 10 ? "0" + i : String.valueOf(i);
-        return CLIENT_SPAN.toBuilder()
+        return spanBuilder(testSuffix)
           .id(i + 1)
-          .remoteEndpoint(Endpoint.newBuilder().serviceName("yak" + suffix).build())
+          .remoteEndpoint(Endpoint.newBuilder().serviceName("yak" + suffix + testSuffix).build())
           .build();
       })
       .collect(Collectors.toList());
     accept(spans);
 
-    assertThat(names().getRemoteServiceNames("frontend").execute())
+    assertThat(names().getRemoteServiceNames(spans.get(0).localServiceName()).execute())
       .containsExactlyInAnyOrderElementsOf(spans.stream().map(Span::remoteServiceName)::iterator);
   }
 
   /** Ensures the service name index returns distinct results */
-  @Test protected void getRemoteServiceNames_dedupes() throws IOException {
+  @Test protected void getRemoteServiceNames_dedupes(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
     List<Span> spans = IntStream.rangeClosed(0, 50)
-      .mapToObj(i -> CLIENT_SPAN.toBuilder().id(i + 1).build())
+      .mapToObj(i -> spanBuilder(testSuffix).remoteEndpoint(BACKEND).build())
       .collect(Collectors.toList());
     accept(spans);
 
-    assertThat(names().getRemoteServiceNames("frontend").execute())
-      .containsExactly(CLIENT_SPAN.remoteServiceName());
+    assertThat(names().getRemoteServiceNames(spans.get(0).localServiceName()).execute())
+      .containsExactly(BACKEND.serviceName());
   }
 
-  @Test protected void getRemoteServiceNames_noRemoteServiceName() throws IOException {
-    accept(Span.newBuilder().traceId("a").id("a").localEndpoint(FRONTEND).build());
+  @Test
+  protected void getRemoteServiceNames_noRemoteServiceName(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span span = spanBuilder(testSuffix).build();
+    accept(span);
 
-    assertThat(names().getRemoteServiceNames("frontend").execute()).isEmpty();
+    assertThat(names().getRemoteServiceNames(span.localServiceName()).execute()).isEmpty();
   }
 
-  @Test protected void getRemoteServiceNames_serviceNameGoesLowercase() throws IOException {
-    accept(CLIENT_SPAN);
+  @Test
+  protected void getRemoteServiceNames_serviceNameGoesLowercase(TestInfo testInfo)
+    throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span clientSpan = newClientSpan(testSuffix);
 
-    assertThat(names().getRemoteServiceNames("FrOnTeNd").execute())
-      .containsExactly(CLIENT_SPAN.remoteServiceName());
+    accept(clientSpan);
+
+    String uppercase = clientSpan.localServiceName().toUpperCase(Locale.ROOT);
+    assertThat(names().getRemoteServiceNames(uppercase).execute())
+      .containsExactly(clientSpan.remoteServiceName());
   }
 
-  @Test protected void getSpanNames_doesNotMapNameToRemoteServiceName() throws Exception {
-    accept(CLIENT_SPAN);
+  @Test
+  protected void getSpanNames_doesNotMapNameToRemoteServiceName(TestInfo testInfo)
+    throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span clientSpan = newClientSpan(testSuffix);
 
-    assertThat(names().getSpanNames(CLIENT_SPAN.remoteServiceName()).execute())
+    accept(clientSpan);
+
+    assertThat(names().getSpanNames(clientSpan.remoteServiceName()).execute())
       .isEmpty();
   }
 
-  @Test protected void getSpanNames() throws Exception {
-    assertThat(names().getSpanNames("frontend").execute())
+  @Test protected void getSpanNames(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span span = spanBuilder(testSuffix).build();
+
+    assertThat(names().getSpanNames(span.localServiceName()).execute())
       .isEmpty();
 
-    accept(CLIENT_SPAN);
+    accept(span);
 
-    assertThat(names().getSpanNames("frontend" + 1).execute())
+    assertThat(names().getSpanNames(span.localServiceName() + 1).execute())
       .isEmpty();
 
-    assertThat(names().getSpanNames("frontend").execute())
-      .contains(CLIENT_SPAN.name());
+    assertThat(names().getSpanNames(span.localServiceName()).execute())
+      .contains(span.name());
   }
 
-  @Test protected void getSpanNames_allReturned() throws IOException {
+  @Test protected void getSpanNames_allReturned(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
     // Assure a default store limit isn't hit by assuming if 50 are returned, all are returned
     List<Span> spans = IntStream.rangeClosed(0, 50)
       .mapToObj(i -> {
         String suffix = i < 10 ? "0" + i : String.valueOf(i);
-        return CLIENT_SPAN.toBuilder().id(i + 1).name("yak" + suffix).build();
+        return spanBuilder(testSuffix).name("yak" + suffix).build();
       })
       .collect(Collectors.toList());
     accept(spans);
 
-    assertThat(names().getSpanNames("frontend").execute())
+    assertThat(names().getSpanNames(spans.get(0).localServiceName()).execute())
       .containsExactlyInAnyOrderElementsOf(spans.stream().map(Span::name)::iterator);
   }
 
   /** Ensures the span name index returns distinct results */
-  @Test protected void getSpanNames_dedupes() throws IOException {
+  @Test protected void getSpanNames_dedupes(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
     List<Span> spans = IntStream.rangeClosed(0, 50)
-      .mapToObj(i -> CLIENT_SPAN.toBuilder().id(i + 1).build())
+      .mapToObj(i -> spanBuilder(testSuffix).build())
       .collect(Collectors.toList());
     accept(spans);
 
-    assertThat(names().getSpanNames("frontend").execute())
-      .containsExactly(CLIENT_SPAN.name());
+    assertThat(names().getSpanNames(spans.get(0).localServiceName()).execute())
+      .containsExactly(spans.get(0).name());
   }
 
-  @Test protected void getSpanNames_noSpanName() throws IOException {
-    accept(Span.newBuilder().traceId("a").id("a").localEndpoint(FRONTEND).build());
+  @Test protected void getSpanNames_noSpanName(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span span = spanBuilder(testSuffix).name(null).build();
+    accept(span);
 
-    assertThat(names().getSpanNames("frontend").execute()).isEmpty();
+    assertThat(names().getSpanNames(span.localServiceName()).execute()).isEmpty();
   }
 
-  @Test protected void getSpanNames_serviceNameGoesLowercase() throws IOException {
-    accept(CLIENT_SPAN);
+  @Test protected void getSpanNames_serviceNameGoesLowercase(TestInfo testInfo) throws Exception {
+    String testSuffix = testSuffix(testInfo);
+    Span span = spanBuilder(testSuffix).build();
+    accept(span);
 
-    assertThat(names().getSpanNames("FrOnTeNd").execute()).containsExactly("get");
+    String uppercase = span.localServiceName().toUpperCase(Locale.ROOT);
+    assertThat(names().getSpanNames(uppercase).execute())
+      .containsExactly(span.name());
   }
 }

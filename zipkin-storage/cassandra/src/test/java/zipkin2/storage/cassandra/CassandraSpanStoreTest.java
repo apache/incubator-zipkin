@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -16,16 +16,15 @@ package zipkin2.storage.cassandra;
 import java.util.Collections;
 import java.util.List;
 import org.junit.Test;
-import org.mockito.Mockito;
 import zipkin2.Call;
 import zipkin2.Span;
 import zipkin2.storage.QueryRequest;
 import zipkin2.storage.cassandra.SelectTraceIdsFromServiceSpan.Factory.FlatMapServicesToInputs;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
 import static zipkin2.TestObjects.DAY;
 import static zipkin2.TestObjects.TODAY;
+import static zipkin2.storage.cassandra.InternalForTests.mockSession;
 
 // TODO: tests use toString because the call composition chain is complex (includes flat mapping)
 // This could be made a little less complex if we scrub out map=>map to a list of transformations,
@@ -117,10 +116,6 @@ public class CassandraSpanStoreTest {
   }
 
   static CassandraSpanStore spanStore(CassandraStorage.Builder builder) {
-    return new CassandraSpanStore(
-      builder
-        .sessionFactory(mock(CassandraStorage.SessionFactory.class, Mockito.RETURNS_MOCKS))
-        .build()) {
-    };
+    return new CassandraSpanStore(builder.sessionFactory(storage -> mockSession()).build());
   }
 }

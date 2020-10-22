@@ -14,6 +14,7 @@
 package zipkin2.storage.cassandra.v1;
 
 import zipkin2.Span;
+import zipkin2.internal.Dependencies;
 import zipkin2.internal.V1ThriftSpanWriter;
 import zipkin2.storage.AutocompleteTags;
 import zipkin2.storage.QueryRequest;
@@ -21,10 +22,16 @@ import zipkin2.storage.ServiceAndSpanNames;
 
 final class Tables {
   /**
-   * This table includes {@linkplain V1ThriftSpanWriter thrift-encoded} spans, supporting
-   * {@link SelectFromTraces}.
+   * This table includes {@linkplain V1ThriftSpanWriter thrift-encoded} spans, supporting {@link
+   * SelectFromTraces}.
    */
   static final String TRACES = "traces";
+
+  /**
+   * This table includes {@linkplain Dependencies#fromThrift thrift-encoded} dependency links,
+   * supporting {@link SelectDependencies}.
+   */
+  static final String DEPENDENCIES = "dependencies";
 
   /**
    * This index supports {@link ServiceAndSpanNames#getServiceNames()}}.

@@ -66,5 +66,11 @@
       <artifactId>kryo</artifactId>
       <scope>test</scope>
     </dependency>
+    <dependency>
+      <groupId>com.google.code.gson</groupId>
+      <artifactId>gson</artifactId>
+      <!-- this dependency is shaded out, but IntelliJ can't figure it out. -->
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 </project>

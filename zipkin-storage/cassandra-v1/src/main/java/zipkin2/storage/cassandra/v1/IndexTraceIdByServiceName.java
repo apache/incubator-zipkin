@@ -13,29 +13,23 @@
  */
 package zipkin2.storage.cassandra.v1;
 
-import com.datastax.driver.core.BoundStatement;
-import com.datastax.driver.core.querybuilder.Insert;
-import com.datastax.driver.core.querybuilder.QueryBuilder;
+import com.datastax.oss.driver.api.core.cql.BoundStatementBuilder;
 import java.util.concurrent.ThreadLocalRandom;
+
+import static zipkin2.storage.cassandra.v1.IndexTraceId.BUCKET_COUNT;
+import static zipkin2.storage.cassandra.v1.Tables.SERVICE_NAME_INDEX;
 
 // QueryRequest.serviceName
 final class IndexTraceIdByServiceName extends IndexTraceId.Factory {
-  // Legacy behaviour was to use a static singleton of ThreadLocalRandom for bucket selection
-  private static final ThreadLocalRandom RAND = ThreadLocalRandom.current();
-
   IndexTraceIdByServiceName(CassandraStorage storage, int indexTtl) {
-    super(storage, Tables.SERVICE_NAME_INDEX, indexTtl);
+    super("INSERT INTO " + SERVICE_NAME_INDEX
+        + " (ts, trace_id, service_name, bucket) VALUES (?,?,?,?)",
+      storage, indexTtl);
   }
 
-  @Override public Insert declarePartitionKey(Insert insert) {
-    return insert
-      .value("service_name", QueryBuilder.bindMarker("service_name"))
-      .value("bucket", QueryBuilder.bindMarker("bucket"));
-  }
-
-  @Override public BoundStatement bindPartitionKey(BoundStatement bound, String partitionKey) {
-    return bound
-      .setInt("bucket", RAND.nextInt(bucketCount))
-      .setString("service_name", partitionKey);
+  @Override void bindPartitionKey(BoundStatementBuilder bound, String service_name) {
+    bound
+      .setString(2, service_name)
+      .setInt(3, ThreadLocalRandom.current().nextInt(BUCKET_COUNT));
   }
 }

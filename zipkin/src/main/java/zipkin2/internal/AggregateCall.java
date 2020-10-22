@@ -63,12 +63,12 @@ public abstract class AggregateCall<I, O> extends Call.Base<O> {
   }
 
   final Logger log = Logger.getLogger(getClass().getName());
-  final List<? extends Call<I>> calls;
+  final List<Call<I>> delegate;
 
-  protected AggregateCall(List<? extends Call<I>> calls) {
-    assert !calls.isEmpty() : "do not create empty aggregate calls";
-    assert calls.size() > 1 : "do not create single-element aggregates";
-    this.calls = calls;
+  protected AggregateCall(List<Call<I>> delegate) {
+    assert !delegate.isEmpty() : "do not create empty aggregate calls";
+    assert delegate.size() > 1 : "do not create single-element aggregates";
+    this.delegate = delegate;
   }
 
   protected abstract O newOutput();
@@ -83,11 +83,11 @@ public abstract class AggregateCall<I, O> extends Call.Base<O> {
   }
 
   @Override protected O doExecute() throws IOException {
-    int length = calls.size();
+    int length = delegate.size();
     Throwable firstError = null;
     O result = newOutput();
     for (int i = 0; i < length; i++) {
-      Call<I> call = calls.get(i);
+      Call<I> call = delegate.get(i);
       try {
         append(call.execute(), result);
       } catch (Throwable e) {
@@ -105,19 +105,19 @@ public abstract class AggregateCall<I, O> extends Call.Base<O> {
   }
 
   @Override protected void doEnqueue(Callback<O> callback) {
-    int length = calls.size();
+    int length = delegate.size();
     AtomicInteger remaining = new AtomicInteger(length);
     AtomicReference firstError = new AtomicReference();
     O result = newOutput();
     for (int i = 0; i < length; i++) {
-      Call<I> call = calls.get(i);
+      Call<I> call = delegate.get(i);
       call.enqueue(new CountdownCallback(call, remaining, firstError, result, callback));
     }
   }
 
   @Override protected void doCancel() {
-    for (int i = 0, length = calls.size(); i < length; i++) {
-      calls.get(i).cancel();
+    for (int i = 0, length = delegate.size(); i < length; i++) {
+      delegate.get(i).cancel();
     }
   }
 
@@ -164,15 +164,19 @@ public abstract class AggregateCall<I, O> extends Call.Base<O> {
   }
 
   protected final List<Call<I>> cloneCalls() {
-    int length = calls.size();
+    int length = delegate.size();
     List<Call<I>> result = new ArrayList<Call<I>>(length);
     for (int i = 0; i < length; i++) {
-      result.add(calls.get(i).clone());
+      result.add(delegate.get(i).clone());
     }
     return result;
   }
 
+  public final List<Call<I>> delegate() {
+    return delegate;
+  }
+
   @Override public String toString() {
-    return "AggregateCall{" + calls + "}";
+    return "AggregateCall{" + delegate + "}";
   }
 }

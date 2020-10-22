@@ -57,7 +57,7 @@
     <!-- It's easy for Jackson dependencies to get misaligned, so we manage it ourselves. -->
     <jackson.version>2.11.3</jackson.version>
 
-    <cassandra-driver-core.version>3.10.2</cassandra-driver-core.version>
+    <java-driver.version>4.9.0</java-driver.version>
     <jooq.version>3.13.5</jooq.version>
     <micrometer.version>1.5.5</micrometer.version>
     <spring-boot.version>2.3.4.RELEASE</spring-boot.version>

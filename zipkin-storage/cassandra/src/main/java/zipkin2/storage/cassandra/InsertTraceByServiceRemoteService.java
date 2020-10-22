@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,20 +13,18 @@
  */
 package zipkin2.storage.cassandra;
 
-import com.datastax.driver.core.PreparedStatement;
-import com.datastax.driver.core.ResultSet;
-import com.datastax.driver.core.ResultSetFuture;
-import com.datastax.driver.core.Session;
-import com.datastax.driver.core.querybuilder.QueryBuilder;
+import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.cql.AsyncResultSet;
+import com.datastax.oss.driver.api.core.cql.PreparedStatement;
 import com.google.auto.value.AutoValue;
 import java.util.UUID;
+import java.util.concurrent.CompletionStage;
 import zipkin2.Call;
 import zipkin2.storage.cassandra.internal.call.ResultSetFutureCall;
 
 import static zipkin2.storage.cassandra.Schema.TABLE_TRACE_BY_SERVICE_REMOTE_SERVICE;
 
 final class InsertTraceByServiceRemoteService extends ResultSetFutureCall<Void> {
-
   @AutoValue abstract static class Input {
     abstract String service();
 
@@ -39,20 +37,17 @@ final class InsertTraceByServiceRemoteService extends ResultSetFutureCall<Void> 
     abstract String trace_id();
   }
 
-  static class Factory {
-    final Session session;
+  static final class Factory {
+    final CqlSession session;
     final PreparedStatement preparedStatement;
     final boolean strictTraceId;
 
-    Factory(Session session, boolean strictTraceId) {
+    Factory(CqlSession session, boolean strictTraceId) {
       this.session = session;
       this.preparedStatement =
-        session.prepare(QueryBuilder.insertInto(TABLE_TRACE_BY_SERVICE_REMOTE_SERVICE)
-          .value("service", QueryBuilder.bindMarker("service"))
-          .value("remote_service", QueryBuilder.bindMarker("remote_service"))
-          .value("bucket", QueryBuilder.bindMarker("bucket"))
-          .value("ts", QueryBuilder.bindMarker("ts"))
-          .value("trace_id", QueryBuilder.bindMarker("trace_id")));
+        session.prepare("INSERT INTO " + TABLE_TRACE_BY_SERVICE_REMOTE_SERVICE
+          + " (service,remote_service,bucket,ts,trace_id)"
+          + " VALUES (?,?,?,?,?)");
       this.strictTraceId = strictTraceId;
     }
 
@@ -78,16 +73,16 @@ final class InsertTraceByServiceRemoteService extends ResultSetFutureCall<Void> 
     this.input = input;
   }
 
-  @Override protected ResultSetFuture newFuture() {
-    return factory.session.executeAsync(factory.preparedStatement.bind()
-      .setString("service", input.service())
-      .setString("remote_service", input.remote_service())
-      .setInt("bucket", input.bucket())
-      .setUUID("ts", input.ts())
-      .setString("trace_id", input.trace_id()));
+  @Override protected CompletionStage<AsyncResultSet> newCompletionStage() {
+    return factory.session.executeAsync(factory.preparedStatement.boundStatementBuilder()
+      .setString(0, input.service())
+      .setString(1, input.remote_service())
+      .setInt(2, input.bucket())
+      .setUuid(3, input.ts())
+      .setString(4, input.trace_id()).build());
   }
 
-  @Override public Void map(ResultSet input) {
+  @Override public Void map(AsyncResultSet input) {
     return null;
   }
 

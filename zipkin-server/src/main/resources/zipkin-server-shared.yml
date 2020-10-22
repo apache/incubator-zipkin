@@ -105,8 +105,8 @@ zipkin:
     cassandra:
       # Comma separated list of host addresses part of Cassandra cluster. Ports default to 9042 but you can also specify a custom port with 'host:port'.
       contact-points: ${CASSANDRA_CONTACT_POINTS:localhost}
-      # Name of the datacenter that will be considered "local" for latency load balancing. When unset, load-balancing is round-robin.
-      local-dc: ${CASSANDRA_LOCAL_DC:}
+      # Name of the datacenter that will be considered "local" for load balancing.
+      local-dc: ${CASSANDRA_LOCAL_DC:datacenter1}
       # Will throw an exception on startup if authentication fails.
       username: ${CASSANDRA_USERNAME:}
       password: ${CASSANDRA_PASSWORD:}
@@ -130,8 +130,8 @@ zipkin:
     cassandra3:
       # Comma separated list of host addresses part of Cassandra cluster. Ports default to 9042 but you can also specify a custom port with 'host:port'.
       contact-points: ${CASSANDRA_CONTACT_POINTS:localhost}
-      # Name of the datacenter that will be considered "local" for latency load balancing. When unset, load-balancing is round-robin.
-      local-dc: ${CASSANDRA_LOCAL_DC:}
+      # Name of the datacenter that will be considered "local" for load balancing.
+      local-dc: ${CASSANDRA_LOCAL_DC:datacenter1}
       # Will throw an exception on startup if authentication fails.
       username: ${CASSANDRA_USERNAME:}
       password: ${CASSANDRA_PASSWORD:}
@@ -254,36 +254,28 @@ logging:
   pattern:
     level: "%clr(%5p) %clr([%X{traceId}/%X{spanId}]){yellow}"
   level:
-    # 'modern compatibility layer' of Guava, and this will be gone in v4
-    com.datastax.driver.core.GuavaCompatibility: 'WARN'
-    # use of native clocks in Cassandra is not insightful
-    com.datastax.driver.core.ClockFactory: 'WARN'
-    # shading will not change now and be gone in v4
-    com.datastax.driver.core.NettyUtil: 'WARN'
-    # "request at Consistency Level LOCAL_ONE but the non-DC aware RoundRobinPolicy is in use"
-    # This will go away in v4 and there's no intention to change prior to that
-    com.datastax.driver.core.policies.RoundRobinPolicy: 'OFF'
+    # Don't print driver version in console output
+    com.datastax.oss.driver.internal.core.DefaultMavenCoordinates: 'WARN'
+    # We exclude Geo codec and Graph extensions to keep size down
+    com.datastax.oss.driver.internal.core.context.InternalDriverContext: 'WARN'
+    # Use of native clocks in Cassandra is not insightful
+    com.datastax.oss.driver.internal.core.time.Clock: 'WARN'
     # Silence ResponseTimeoutException in the Armeria framework since we log it anyways in HTTP
     # logging when enabled. https://github.com/line/armeria/issues/2000
     com.linecorp.armeria.client.HttpResponseDecoder: 'OFF'
     com.linecorp.armeria.common.Flags: 'OFF'
-    com.linecorp.armeria.server.docs.DocStringExtractor: 'OFF'
-    com.linecorp.armeria.server.docs.DocService: 'OFF'
-    com.linecorp.armeria.internal.common.thrift.ThriftSerializationFormatProvider: 'OFF'
-    # Redundant to logging already done in c.l.a.s.Server
-    com.linecorp.armeria.spring.ArmeriaAutoConfiguration: 'WARN'
+    com.linecorp.armeria.common.SerializationFormat: 'OFF'
     # Hostname logging is not Zipkin's duty
     com.linecorp.armeria.common.util.SystemInfo: 'WARN'
+    com.linecorp.armeria.internal.common.JavaVersionSpecific: 'OFF'
+    com.linecorp.armeria.server.docs.DocStringExtractor: 'OFF'
+    com.linecorp.armeria.server.docs.DocService: 'OFF'
+    # Redundant to logging already done in c.l.a.s.Server
+    com.linecorp.armeria.spring.ArmeriaAutoConfiguration: 'WARN'
     # kafka is quite chatty so we switch everything off by default
     org.apache.kafka: 'OFF'
 #     # investigate /api/v2/dependencies
 #     zipkin2.internal.DependencyLinker: 'DEBUG'
-#     # log cassandra queries (DEBUG is without values)
-#     com.datastax.driver.core.QueryLogger.NORMAL: 'TRACE'
-#     # log cassandra connections
-#     com.datastax.driver.core.Connection: 'DEBUG'
-#     # log cassandra trace propagation
-#     com.datastax.driver.core.Message: 'TRACE'
 #     # log reason behind http collector dropped messages
 #     zipkin2.server.ZipkinHttpCollector: 'DEBUG'
 #     zipkin2.collector.kafka.KafkaCollector: 'DEBUG'

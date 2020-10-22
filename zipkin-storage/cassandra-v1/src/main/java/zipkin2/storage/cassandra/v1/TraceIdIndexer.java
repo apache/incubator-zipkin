@@ -20,7 +20,6 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -61,15 +60,15 @@ interface TraceIdIndexer extends Iterable<Input> {
 
   /** This is shared singleton as inserts can come from any thread. */
   class Factory {
-    final ConcurrentMap<Entry<String, Long>, Expiration<Entry<String, Long>, Pair>> cache =
+    final ConcurrentMap<Map.Entry<String, Long>, Expiration<Map.Entry<String, Long>, Pair>> cache =
       new ConcurrentHashMap<>();
-    final DelayQueue<Expiration<Entry<String, Long>, Pair>> expirations = new DelayQueue<>();
+    final DelayQueue<Expiration<Map.Entry<String, Long>, Pair>> expirations = new DelayQueue<>();
     final long ttlNanos;
     final int cardinality;
-    final String table;
+    final String statement;
 
-    Factory(String table, long ttlNanos, int cardinality) {
-      this.table = table;
+    Factory(String statement, long ttlNanos, int cardinality) {
+      this.statement = statement;
       this.ttlNanos = ttlNanos;
       this.cardinality = cardinality;
     }
@@ -166,7 +165,7 @@ interface TraceIdIndexer extends Iterable<Input> {
       Set<Input> result = entriesThatIncreaseGap();
       if (LOG.isDebugEnabled() && inputs.size() > result.size()) {
         int delta = inputs.size() - result.size();
-        LOG.debug("optimized out {}/{} inserts into {}", delta, inputs.size(), factory.table);
+        LOG.debug("optimized out {}/{} inputs to {}", delta, inputs.size(), factory.statement);
       }
       return result.iterator();
     }
@@ -175,11 +174,11 @@ interface TraceIdIndexer extends Iterable<Input> {
       if (inputs.isEmpty()) return inputs;
 
       OnChangeUpdateMap toUpdate = new OnChangeUpdateMap(factory);
-      Map<Entry<String, Long>, Set<Long>> mappedInputs = new LinkedHashMap<>();
+      Map<Map.Entry<String, Long>, Set<Long>> mappedInputs = new LinkedHashMap<>();
 
       // Enter a loop that affects shared state when an update widens the time interval for a key.
       for (Input input : inputs) {
-        Entry<String, Long> key = toEntry(input);
+        Map.Entry<String, Long> key = toEntry(input);
         long timestamp = input.ts();
         add(mappedInputs, key, timestamp);
         toUpdate.currentTimestamp = timestamp;
@@ -190,8 +189,8 @@ interface TraceIdIndexer extends Iterable<Input> {
       // it is the first or last timestamp. By ignoring those between an existing interval, we can
       // end up with less Cassandra writes.
       Set<Input> result = new LinkedHashSet<>();
-      for (Entry<String, Long> needsUpdate : toUpdate.keySet()) {
-        Expiration<Entry<String, Long>, Pair> existing = factory.cache.get(needsUpdate);
+      for (Map.Entry<String, Long> needsUpdate : toUpdate.keySet()) {
+        Expiration<Map.Entry<String, Long>, Pair> existing = factory.cache.get(needsUpdate);
 
         // The bounds of the factory cache are used to prevent out-of-memory issues, but may be
         // accidentally set to a value too low in practice. If we can't find an existing cache
@@ -229,8 +228,8 @@ interface TraceIdIndexer extends Iterable<Input> {
    * When a range change occurred during {@link #apply}, we save off the triggering entry for later
    * processing.
    */
-  final class OnChangeUpdateMap extends LinkedHashMap<Entry<String, Long>, Pair> implements
-    BiFunction<Entry<String, Long>, Expiration<Entry<String, Long>, Pair>, Expiration<Entry<String, Long>, Pair>> {
+  final class OnChangeUpdateMap extends LinkedHashMap<Map.Entry<String, Long>, Pair> implements
+    BiFunction<Map.Entry<String, Long>, Expiration<Map.Entry<String, Long>, Pair>, Expiration<Map.Entry<String, Long>, Pair>> {
     final Factory factory;
     long currentTimestamp;
 
@@ -238,8 +237,8 @@ interface TraceIdIndexer extends Iterable<Input> {
       this.factory = factory;
     }
 
-    @Override public Expiration<Entry<String, Long>, Pair> apply(Entry<String, Long> key,
-      @Nullable Expiration<Entry<String, Long>, Pair> oldEntry) {
+    @Override public Expiration<Map.Entry<String, Long>, Pair> apply(Map.Entry<String, Long> key,
+      @Nullable Expiration<Map.Entry<String, Long>, Pair> oldEntry) {
       Pair oldRange = oldEntry != null ? oldEntry.getValue() : null;
       Pair newRange = null;
       if (oldRange != null) {
@@ -252,7 +251,7 @@ interface TraceIdIndexer extends Iterable<Input> {
         newRange = new Pair(currentTimestamp, currentTimestamp);
       }
 
-      Expiration<Entry<String, Long>, Pair> result;
+      Expiration<Map.Entry<String, Long>, Pair> result;
       if (newRange != null) {
         put(key, newRange);
         result = factory.newExpiration(key, newRange);

@@ -13,9 +13,17 @@
  */
 package zipkin2.storage.cassandra.v1;
 
-import com.datastax.driver.core.Session;
+import com.codahale.metrics.Gauge;
+import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.metadata.Node;
+import com.datastax.oss.driver.api.core.metrics.DefaultNodeMetric;
+import com.datastax.oss.driver.api.core.metrics.Metrics;
+import com.datastax.oss.driver.api.core.servererrors.InvalidQueryException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
-import org.junit.jupiter.api.TestInfo;
 import org.junit.jupiter.api.extension.AfterAllCallback;
 import org.junit.jupiter.api.extension.BeforeAllCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
@@ -24,14 +32,20 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testcontainers.containers.ContainerLaunchException;
 import org.testcontainers.containers.GenericContainer;
-import zipkin2.storage.cassandra.Access;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static zipkin2.Call.propagateIfFatal;
+import static zipkin2.storage.cassandra.v1.ITCassandraStorage.SEARCH_TABLES;
+import static zipkin2.storage.cassandra.v1.Tables.DEPENDENCIES;
+import static zipkin2.storage.cassandra.v1.Tables.TRACES;
 
 public class CassandraStorageExtension implements BeforeAllCallback, AfterAllCallback {
   static final Logger LOGGER = LoggerFactory.getLogger(CassandraStorageExtension.class);
   static final int CASSANDRA_PORT = 9042;
   final String image;
   CassandraContainer container;
-  Session globalSession;
+  CqlSession globalSession;
 
   CassandraStorageExtension(String image) {
     this.image = image;
@@ -56,28 +70,38 @@ public class CassandraStorageExtension implements BeforeAllCallback, AfterAllCal
     }
 
     try {
-      globalSession = Access.tryToInitializeSession(contactPoint());
+      globalSession = tryToInitializeSession(contactPoint());
     } catch (RuntimeException | Error e) {
       if (container == null) throw e;
       LOGGER.warn("Couldn't connect to docker image " + image + ": " + e.getMessage(), e);
       container.stop();
       container = null; // try with local connection instead
-      globalSession = Access.tryToInitializeSession(contactPoint());
+      globalSession = tryToInitializeSession(contactPoint());
     }
+    LOGGER.info("Using contactPoint " + contactPoint());
   }
 
-  CassandraStorage.Builder newStorageBuilder(TestInfo testInfo) {
-    return CassandraStorage.newBuilder()
-      .contactPoints(contactPoint())
-      .maxConnections(1)
-      .keyspace(InternalForTests.keyspace(testInfo));
+  // Builds a session without trying to use a namespace or init UDTs
+  static CqlSession tryToInitializeSession(String contactPoint) {
+    CassandraStorage storage = newStorageBuilder(contactPoint).build();
+    CqlSession session = null;
+    try {
+      session = SessionFactory.Default.buildSession(storage);
+      session.execute("SELECT now() FROM system.local");
+    } catch (Throwable e) {
+      propagateIfFatal(e);
+      if (session != null) session.close();
+      assumeTrue(false, e.getMessage());
+    }
+    return session;
+  }
+
+  CassandraStorage.Builder newStorageBuilder() {
+    return newStorageBuilder(contactPoint());
   }
 
   static CassandraStorage.Builder newStorageBuilder(String contactPoint) {
-    return CassandraStorage.newBuilder()
-      .contactPoints(contactPoint)
-      .maxConnections(1)
-      .keyspace("test_cassandra_v1");
+    return CassandraStorage.newBuilder().contactPoints(contactPoint).maxConnections(1);
   }
 
   String contactPoint() {
@@ -88,12 +112,35 @@ public class CassandraStorageExtension implements BeforeAllCallback, AfterAllCal
     }
   }
 
+  void clear(CassandraStorage storage) {
+    // Clear any key cache
+    CassandraSpanConsumer spanConsumer = storage.spanConsumer;
+    if (spanConsumer != null) spanConsumer.clear();
+
+    CqlSession session = storage.session.session;
+    if (session == null) session = globalSession;
+
+    List<String> toTruncate = new ArrayList<>(SEARCH_TABLES);
+    toTruncate.add(DEPENDENCIES);
+    toTruncate.add(TRACES);
+
+    for (String table : toTruncate) {
+      try {
+        session.execute("TRUNCATE " + storage.keyspace + "." + table);
+      } catch (InvalidQueryException e) {
+        assertThat(e).hasMessage("unconfigured table " + table);
+      }
+    }
+
+    blockWhileInFlight(storage);
+  }
+
   @Override public void afterAll(ExtensionContext context) {
     if (context.getRequiredTestClass().getEnclosingClass() != null) {
       // Only run once in outermost scope.
       return;
     }
-    if (globalSession != null) globalSession.getCluster().close();
+    if (globalSession != null) globalSession.close();
   }
 
   static final class CassandraContainer extends GenericContainer<CassandraContainer> {
@@ -103,17 +150,59 @@ public class CassandraStorageExtension implements BeforeAllCallback, AfterAllCal
 
     @Override protected void waitUntilContainerStarted() {
       Unreliables.retryUntilSuccess(120, TimeUnit.SECONDS, () -> {
-        if (!isRunning()) {
-          throw new ContainerLaunchException("Container failed to start");
-        }
+        if (!isRunning()) throw new ContainerLaunchException("Container failed to start");
 
         String contactPoint = getContainerIpAddress() + ":" + getMappedPort(9042);
-        try (Session session = Access.tryToInitializeSession(contactPoint)) {
+        try (CqlSession session = tryToInitializeSession(contactPoint)) {
           session.execute("SELECT now() FROM system.local");
           logger().info("Obtained a connection to container ({})", contactPoint);
           return null; // unused value
         }
       });
     }
+  }
+
+  static long rowCount(CassandraStorage storage, String table) {
+    return storage.session()
+      .execute("SELECT COUNT(*) from " + table)
+      .one()
+      .getLong(0);
+  }
+
+  static void blockWhileInFlight(CassandraStorage storage) {
+    CqlSession session = storage.session.get();
+    // Now, block until writes complete, notably so we can read them.
+    boolean wasInFlight = false;
+    while (true) {
+      if (!poolInFlight(session)) {
+        if (wasInFlight) sleep(100); // give a little more to avoid flakey tests
+        return;
+      }
+      wasInFlight = true;
+      sleep(100);
+    }
+  }
+
+  static void sleep(long millis) {
+    try {
+      Thread.sleep(millis);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new AssertionError(e);
+    }
+  }
+
+  // Use metrics to wait for in-flight requests to settle per
+  // https://groups.google.com/a/lists.datastax.com/g/java-driver-user/c/5um_yGNynow/m/cInH5I5jBgAJ
+  static boolean poolInFlight(CqlSession session) {
+    Collection<Node> nodes = session.getMetadata().getNodes().values();
+    Optional<Metrics> metrics = session.getMetrics();
+    for (Node node : nodes) {
+      int inFlight = metrics.flatMap(m -> m.getNodeMetric(node, DefaultNodeMetric.IN_FLIGHT))
+        .map(m -> ((Gauge<Integer>) m).getValue())
+        .orElse(0);
+      if (inFlight > 0) return true;
+    }
+    return false;
   }
 }

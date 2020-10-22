@@ -36,12 +36,15 @@ services:
     # slim doesn't include Cassandra support, so switch to the larger image
     image: openzipkin/zipkin:${TAG:-latest}
     environment:
-      - STORAGE_TYPE=cassandra3
+      # To test legacy storage, use STORAGE_TYPE=cassandra
+      - STORAGE_TYPE=${STORAGE_TYPE:-cassandra3}
       # When using the test docker image, or have schema pre-installed, you don't need to re-install it
       - CASSANDRA_ENSURE_SCHEMA=false
       # When overriding this value, note the minimum supported version is 3.9
       # If you you cannot run 3.9+, but can run 2.2+, set STORAGE_TYPE=cassandra
       - CASSANDRA_CONTACT_POINTS=cassandra
+    # Uncomment to enable request logging (TRACE shows query values)
+    # command: --logging.level.com.datastax.oss.driver.internal.core.tracker.RequestLogger=TRACE
     depends_on:
       - storage
 
@@ -50,7 +53,7 @@ services:
       file: docker-compose-dependencies.yml
       service: dependencies
     environment:
-      - STORAGE_TYPE=cassandra3
+      - STORAGE_TYPE=${STORAGE_TYPE:-cassandra3}
       - CASSANDRA_CONTACT_POINTS=cassandra
     depends_on:
       - storage

@@ -13,28 +13,29 @@
  */
 package zipkin2.storage.cassandra.v1;
 
-import com.datastax.driver.core.PreparedStatement;
-import com.datastax.driver.core.ResultSet;
-import com.datastax.driver.core.Session;
+import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.cql.PreparedStatement;
+import com.datastax.oss.driver.api.core.cql.ResultSet;
 
 final class LazySession {
-  private final SessionFactory sessionFactory;
-  private final CassandraStorage storage;
-  private volatile Session session;
-  private volatile PreparedStatement healthCheck; // guarded by session
-  private volatile Schema.Metadata metadata; // guarded by session
+  final SessionFactory sessionFactory;
+  final CassandraStorage storage;
+  volatile CqlSession session;
+  volatile PreparedStatement healthCheck; // guarded by session
+  volatile Schema.Metadata metadata; // guarded by session
 
   LazySession(SessionFactory sessionFactory, CassandraStorage storage) {
     this.sessionFactory = sessionFactory;
     this.storage = storage;
   }
 
-  Session get() {
+  CqlSession get() {
     if (session == null) {
       synchronized (this) {
         if (session == null) {
           session = sessionFactory.create(storage);
-          metadata = Schema.readMetadata(session); // warn only once when schema problems exist
+          // cached here to warn only once when schema problems exist
+          metadata = Schema.readMetadata(session, storage.keyspace);
           healthCheck = session.prepare("SELECT trace_id FROM " + Tables.TRACES + " limit 1");
         }
       }
@@ -53,8 +54,10 @@ final class LazySession {
   }
 
   void close() {
-    Session maybeSession = session;
-    // The resource to close in Datastax Java Driver v3 is the cluster. In v4, it only session
-    if (maybeSession != null) maybeSession.getCluster().close();
+    CqlSession maybeSession = session;
+    if (maybeSession != null) {
+      session.close();
+      session = null;
+    }
   }
 }

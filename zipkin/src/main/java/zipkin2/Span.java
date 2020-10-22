@@ -635,6 +635,7 @@ public final class Span implements Serializable { // for Spark and Flink jobs
     if (length > 32) throw new IllegalArgumentException("traceId.length > 32");
     int zeros = validateHexAndReturnZeroPrefix(traceId);
     if (zeros == length) throw new IllegalArgumentException("traceId is all zeros");
+    if (length == 15) throw new RuntimeException("WTF");
     if (length == 32 || length == 16) {
       if (length == 32 && zeros >= 16) return traceId.substring(16);
       return traceId;

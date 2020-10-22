@@ -24,6 +24,7 @@ import static zipkin2.TestObjects.CLIENT_SPAN;
 import static zipkin2.TestObjects.FRONTEND;
 import static zipkin2.TestObjects.TODAY;
 import static zipkin2.TestObjects.TRACE;
+import static zipkin2.TestObjects.newTrace;
 import static zipkin2.storage.ITSpanStore.requestBuilder;
 
 public class StrictTraceIdTest {
@@ -59,9 +60,11 @@ public class StrictTraceIdTest {
   }
 
   @Test public void filterSpans() {
-    assertThat(StrictTraceId.filterSpans(CLIENT_SPAN.traceId()).map(TRACE)).isEqualTo(TRACE);
-
     ArrayList<Span> trace = new ArrayList<>(TRACE);
+
+    assertThat(StrictTraceId.filterSpans(CLIENT_SPAN.traceId()).map(trace))
+      .isEqualTo(TRACE);
+
     trace.set(1, CLIENT_SPAN.toBuilder().traceId(CLIENT_SPAN.traceId().substring(16)).build());
     assertThat(StrictTraceId.filterSpans(CLIENT_SPAN.traceId()).map(trace))
       .doesNotContain(CLIENT_SPAN);

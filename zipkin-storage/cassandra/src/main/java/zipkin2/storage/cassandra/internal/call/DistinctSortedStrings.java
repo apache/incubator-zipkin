@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,7 +13,7 @@
  */
 package zipkin2.storage.cassandra.internal.call;
 
-import com.datastax.driver.core.Row;
+import com.datastax.oss.driver.api.core.cql.Row;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -23,11 +23,10 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 
 public final class DistinctSortedStrings extends AccumulateAllResults<List<String>> {
-  final String columnName;
+  static final AccumulateAllResults<List<String>> INSTANCE = new DistinctSortedStrings();
 
-  public DistinctSortedStrings(String columnName) {
-    if (columnName == null) throw new NullPointerException("columnName == null");
-    this.columnName = columnName;
+  public static AccumulateAllResults<List<String>> get() {
+    return INSTANCE;
   }
 
   @Override protected Supplier<List<String>> supplier() {
@@ -49,12 +48,15 @@ public final class DistinctSortedStrings extends AccumulateAllResults<List<Strin
 
   @Override protected BiConsumer<Row, List<String>> accumulator() {
     return (row, list) -> {
-      String result = row.getString(columnName);
+      String result = row.getString(0);
       if (!result.isEmpty()) list.add(result);
     };
   }
 
   @Override public String toString() {
-    return "DistinctSortedStrings{" + columnName + "}";
+    return "DistinctSortedStrings{}";
+  }
+
+  DistinctSortedStrings() {
   }
 }

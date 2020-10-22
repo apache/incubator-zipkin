@@ -59,7 +59,7 @@ public final class TracesAdapter implements Traces {
   }
 
   static final class ScatterGather extends AggregateCall<List<Span>, List<List<Span>>> {
-    ScatterGather(List<? extends Call<List<Span>>> calls) {
+    ScatterGather(List<Call<List<Span>>> calls) {
       super(calls);
     }
 

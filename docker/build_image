@@ -36,6 +36,9 @@ case ${TARGET} in
   zipkin )
     DOCKERFILE_PATH=docker/Dockerfile
     ;;
+  zipkin-builder )
+    DOCKERFILE_PATH=docker/builder/Dockerfile
+    ;;
   zipkin-slim )
     DOCKERFILE_PATH=docker/Dockerfile
     ;;

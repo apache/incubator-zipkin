@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,8 +13,6 @@
  */
 package zipkin2.server.internal.cassandra3;
 
-import brave.Tracing;
-import brave.cassandra.driver.TracingSession;
 import java.util.List;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.BeanFactory;
@@ -84,11 +82,11 @@ public class ZipkinCassandra3StorageConfiguration {
     }
 
     @Override public Object postProcessAfterInitialization(Object bean, String beanName) {
-      if (bean instanceof SessionFactory && beanFactory.containsBean("tracing")) {
-        SessionFactory delegate = (SessionFactory) bean;
-        Tracing tracing = beanFactory.getBean(Tracing.class);
-        return (SessionFactory) storage -> TracingSession.create(tracing, delegate.create(storage));
-      }
+      //if (bean instanceof SessionFactory && beanFactory.containsBean("tracing")) {
+      //  SessionFactory delegate = (SessionFactory) bean;
+      //  Tracing tracing = beanFactory.getBean(Tracing.class);
+      //  return (SessionFactory) storage -> TracingSession.create(tracing, delegate.create(storage));
+      //}
       return bean;
     }
 

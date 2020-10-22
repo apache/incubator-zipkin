@@ -19,7 +19,6 @@ import com.linecorp.armeria.client.WebClientBuilder;
 import com.linecorp.armeria.client.logging.LoggingClient;
 import com.linecorp.armeria.common.HttpResponse;
 import com.linecorp.armeria.common.logging.LogLevel;
-import java.util.Arrays;
 import org.junit.jupiter.api.TestInfo;
 import org.junit.jupiter.api.extension.AfterAllCallback;
 import org.junit.jupiter.api.extension.BeforeAllCallback;
@@ -128,7 +127,7 @@ class ElasticsearchStorageExtension implements BeforeAllCallback, AfterAllCallba
         // Example usage: https://github.com/elastic/elasticsearch/blob/3049e55f093487bb582a7e49ad624961415ba31c/x-pack/plugin/security/src/internalClusterTest/java/org/elasticsearch/integration/IndexPrivilegeIntegTests.java#L559
         final String warningHeader = r.headers().get("warning");
         if (warningHeader != null) {
-          if (Arrays.stream(IGNORE_THESE_WARNINGS).noneMatch(warningHeader::contains)) {
+          if (IGNORE_THESE_WARNINGS.stream().noneMatch(p -> p.matcher(warningHeader).find())) {
             throw new IllegalArgumentException("Detected usage of deprecated API for request "
               + req.toString() + ":\n" + warningHeader);
           }
