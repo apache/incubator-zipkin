@@ -260,17 +260,12 @@ logging:
     com.datastax.oss.driver.internal.core.context.InternalDriverContext: 'WARN'
     # Use of native clocks in Cassandra is not insightful
     com.datastax.oss.driver.internal.core.time.Clock: 'WARN'
-    # Silence ResponseTimeoutException in the Armeria framework since we log it anyways in HTTP
-    # logging when enabled. https://github.com/line/armeria/issues/2000
-    com.linecorp.armeria.client.HttpResponseDecoder: 'OFF'
     com.linecorp.armeria.common.Flags: 'OFF'
-    com.linecorp.armeria.common.SerializationFormat: 'OFF'
     # Hostname logging is not Zipkin's duty
     com.linecorp.armeria.common.util.SystemInfo: 'WARN'
-    com.linecorp.armeria.internal.common.JavaVersionSpecific: 'OFF'
     com.linecorp.armeria.server.docs.DocStringExtractor: 'OFF'
     # Redundant to logging already done in c.l.a.s.Server
-    com.linecorp.armeria.spring.ArmeriaAutoConfiguration: 'WARN'
+    com.linecorp.armeria.spring: 'WARN'
     # kafka is quite chatty so we switch everything off by default
     org.apache.kafka: 'OFF'
 #     # investigate /api/v2/dependencies
