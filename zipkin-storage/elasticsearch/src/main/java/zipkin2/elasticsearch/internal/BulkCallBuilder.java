@@ -26,7 +26,6 @@ import com.linecorp.armeria.common.MediaType;
 import com.linecorp.armeria.common.RequestContext;
 import com.linecorp.armeria.common.RequestHeaders;
 import com.linecorp.armeria.common.util.Exceptions;
-import com.linecorp.armeria.internal.shaded.guava.collect.ImmutableList;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.ByteBufOutputStream;
@@ -141,7 +140,7 @@ public final class BulkCallBuilder {
 
     BulkRequestSupplier(List<IndexEntry<?>> entries, boolean shouldAddType,
       RequestHeaders headers, ByteBufAllocator alloc) {
-      this.entries = ImmutableList.copyOf(entries);
+      this.entries = entries;
       this.shouldAddType = shouldAddType;
       this.headers = headers;
       this.alloc = alloc;

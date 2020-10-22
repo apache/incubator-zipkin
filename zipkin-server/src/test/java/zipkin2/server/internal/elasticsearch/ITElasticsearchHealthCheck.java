@@ -50,11 +50,6 @@ public class ITElasticsearchHealthCheck {
 
   static final SettableHealthChecker server1Health = new SettableHealthChecker(true);
 
-  static {
-    // Gives better context when there's an exception such as AbortedStreamException
-    System.setProperty("com.linecorp.armeria.verboseExceptions", "always");
-  }
-
   @ClassRule public static ServerRule server1 = new ServerRule() {
     @Override protected void configure(ServerBuilder sb) {
       sb.service("/", (ctx, req) -> sendResponseAfterAggregate(req, VERSION_RESPONSE));
