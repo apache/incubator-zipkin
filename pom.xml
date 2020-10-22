@@ -50,9 +50,9 @@
 
     <!-- This allows you to test feature branches with jitpack -->
     <armeria.groupId>com.linecorp.armeria</armeria.groupId>
-    <armeria.version>1.1.0</armeria.version>
+    <armeria.version>1.2.0</armeria.version>
     <!-- Match Armeria version to avoid conflicts including running tests in the IDE -->
-    <netty.version>4.1.52.Final</netty.version>
+    <netty.version>4.1.53.Final</netty.version>
 
     <!-- It's easy for Jackson dependencies to get misaligned, so we manage it ourselves. -->
     <jackson.version>2.11.3</jackson.version>

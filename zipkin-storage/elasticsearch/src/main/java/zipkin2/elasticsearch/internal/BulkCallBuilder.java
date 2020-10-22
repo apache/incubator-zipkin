@@ -158,7 +158,9 @@ public final class BulkCallBuilder {
       return writer;
     }
 
-    // Use backpressure, so it's not buffering at all.
+    // There's a high chance that the response is received before the request is complete.
+    // This can be a problem for BulkCallBuilder when it's sending streaming requests.
+    // Hence, we use backpressure, so it's not buffering at all.
     private void writeEntry(HttpRequestWriter writer, int index) {
       if (index == entries.size()) {
         writer.close();
