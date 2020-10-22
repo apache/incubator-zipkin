@@ -269,7 +269,6 @@ logging:
     com.linecorp.armeria.common.util.SystemInfo: 'WARN'
     com.linecorp.armeria.internal.common.JavaVersionSpecific: 'OFF'
     com.linecorp.armeria.server.docs.DocStringExtractor: 'OFF'
-    com.linecorp.armeria.server.docs.DocService: 'OFF'
     # Redundant to logging already done in c.l.a.s.Server
     com.linecorp.armeria.spring.ArmeriaAutoConfiguration: 'WARN'
     # kafka is quite chatty so we switch everything off by default
