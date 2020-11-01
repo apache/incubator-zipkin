@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -20,6 +20,8 @@ import com.google.auto.value.AutoValue;
 import com.linecorp.armeria.common.HttpData;
 import com.linecorp.armeria.common.HttpHeaderNames;
 import com.linecorp.armeria.common.HttpMethod;
+import com.linecorp.armeria.common.HttpRequest;
+import com.linecorp.armeria.common.HttpRequestWriter;
 import com.linecorp.armeria.common.MediaType;
 import com.linecorp.armeria.common.RequestContext;
 import com.linecorp.armeria.common.RequestHeaders;
@@ -31,6 +33,7 @@ import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.handler.codec.http.QueryStringEncoder;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.function.Supplier;
@@ -138,7 +141,7 @@ public final class BulkCallBuilder {
 
     BulkRequestSupplier(List<IndexEntry<?>> entries, boolean shouldAddType,
       RequestHeaders headers, ByteBufAllocator alloc) {
-      this.entries = entries;
+      this.entries = Collections.unmodifiableList(entries);
       this.shouldAddType = shouldAddType;
       this.headers = headers;
       this.alloc = alloc;
@@ -148,13 +151,24 @@ public final class BulkCallBuilder {
       return headers;
     }
 
-    @Override public void writeBody(HttpCall.RequestStream requestStream) {
-      for (IndexEntry<?> entry : entries) {
-        if (!requestStream.tryWrite(HttpData.wrap(serialize(alloc, entry, shouldAddType)))) {
-          // Stream aborted, no need to serialize anymore.
-          return;
-        }
+    @Override
+    public HttpRequest get() {
+      final HttpRequestWriter writer = HttpRequest.streaming(headers);
+      writeEntry(writer, 0);
+      return writer;
+    }
+
+    // Use backpressure, so it's not buffering at all.
+    private void writeEntry(HttpRequestWriter writer, int index) {
+      if (index == entries.size()) {
+        writer.close();
+        return;
       }
+      if (!writer.tryWrite(HttpData.wrap(serialize(alloc, entries.get(index), shouldAddType)))) {
+        // Stream aborted, no need to serialize anymore.
+        return;
+      }
+      writer.whenConsumed().thenRun(() -> writeEntry(writer, index + 1));
     }
   }
 

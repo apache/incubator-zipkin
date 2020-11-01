@@ -23,7 +23,6 @@ import com.linecorp.armeria.common.AggregatedHttpResponse;
 import com.linecorp.armeria.common.HttpData;
 import com.linecorp.armeria.common.HttpHeaders;
 import com.linecorp.armeria.common.HttpRequest;
-import com.linecorp.armeria.common.HttpRequestWriter;
 import com.linecorp.armeria.common.HttpResponse;
 import com.linecorp.armeria.common.HttpStatus;
 import com.linecorp.armeria.common.HttpStatusClass;
@@ -70,19 +69,11 @@ public final class HttpCall<V> extends Call.Base<V> {
    * A supplier of {@linkplain HttpHeaders headers} and {@linkplain HttpData body} of a request to
    * Elasticsearch.
    */
-  public interface RequestSupplier {
+  public interface RequestSupplier extends Supplier<HttpRequest> {
     /**
      * Returns the {@linkplain HttpHeaders headers} for this request.
      */
     RequestHeaders headers();
-
-    /**
-     * Writes the body of this request into the {@link RequestStream}. {@link
-     * RequestStream#tryWrite(HttpData)} can be called any number of times to publish any number of
-     * payload objects. It can be useful to split up a large payload into smaller chunks instead of
-     * buffering everything as one payload.
-     */
-    void writeBody(RequestStream requestStream);
   }
 
   static class AggregatedRequestSupplier implements RequestSupplier {
@@ -106,8 +97,9 @@ public final class HttpCall<V> extends Call.Base<V> {
       return request.headers();
     }
 
-    @Override public void writeBody(RequestStream requestStream) {
-      requestStream.tryWrite(request.content());
+    @Override
+    public HttpRequest get() {
+      return request.toHttpRequest();
     }
   }
 
@@ -205,10 +197,7 @@ public final class HttpCall<V> extends Call.Base<V> {
     final HttpResponse response;
     try (SafeCloseable ignored =
            Clients.withContextCustomizer(ctx -> ctx.logBuilder().name(name))) {
-      HttpRequestWriter httpRequest = HttpRequest.streaming(request.headers());
-      response = httpClient.execute(httpRequest);
-      request.writeBody(httpRequest::tryWrite);
-      httpRequest.close();
+      response = httpClient.execute(request.get());
     }
     CompletableFuture<AggregatedHttpResponse> responseFuture =
       RequestContext.mapCurrent(

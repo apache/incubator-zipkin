@@ -14,7 +14,6 @@
 package zipkin2.elasticsearch.internal;
 
 import com.linecorp.armeria.common.HttpRequest;
-import com.linecorp.armeria.common.HttpRequestWriter;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.PooledByteBufAllocator;
 import java.util.concurrent.TimeUnit;
@@ -36,7 +35,6 @@ import zipkin2.Span;
 import zipkin2.codec.SpanBytesDecoder;
 import zipkin2.elasticsearch.ElasticsearchStorage;
 import zipkin2.elasticsearch.internal.BulkCallBuilder.IndexEntry;
-import zipkin2.elasticsearch.internal.client.HttpCall;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static zipkin2.storage.cassandra.internal.Resources.resourceToString;
@@ -66,10 +64,7 @@ public class BulkRequestBenchmarks {
   @Benchmark public HttpRequest buildAndWriteRequest_singleSpan() {
     BulkCallBuilder builder = new BulkCallBuilder(es, 6.7f, "index-span");
     builder.index(spanIndex, "span", CLIENT_SPAN, BulkIndexWriter.SPAN);
-    HttpCall.RequestSupplier supplier =  builder.build().request;
-    HttpRequestWriter request = HttpRequest.streaming(supplier.headers());
-    supplier.writeBody(request::tryWrite);
-    return request;
+    return builder.build().request.get();
   }
 
   @Benchmark public HttpRequest buildAndWriteRequest_tenSpans() {
@@ -77,10 +72,7 @@ public class BulkRequestBenchmarks {
     for (int i = 0; i < 10; i++) {
       builder.index(spanIndex, "span", CLIENT_SPAN, BulkIndexWriter.SPAN);
     }
-    HttpCall.RequestSupplier supplier =  builder.build().request;
-    HttpRequestWriter request = HttpRequest.streaming(supplier.headers());
-    supplier.writeBody(request::tryWrite);
-    return request;
+    return builder.build().request.get();
   }
 
   // Convenience main entry-point
