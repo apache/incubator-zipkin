@@ -24,14 +24,14 @@ import {
 import KeyboardArrowDownIcon from '@material-ui/icons/KeyboardArrowDown';
 import KeyboardArrowUpIcon from '@material-ui/icons/KeyboardArrowUp';
 import moment from 'moment';
-import React, { useMemo, useCallback } from 'react';
+import React, { useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import styled from 'styled-components';
 
+import SpanCountChart from './SpanCountChart';
 import { selectColorByInfoClass } from '../../constants/color';
 import TraceSummary from '../../models/TraceSummary';
 import { formatDuration } from '../../util/timestamp';
-import ServiceBadge from '../common/ServiceBadge';
 
 interface TraceSummaryRowProps {
   traceSummary: TraceSummary;
@@ -47,14 +47,6 @@ const TraceSummaryRow: React.FC<TraceSummaryRowProps> = ({
   toggleOpen,
 }) => {
   const startTime = moment(traceSummary.timestamp / 1000);
-
-  const sortedServiceSummaries = useMemo(
-    () =>
-      [...traceSummary.serviceSummaries].sort(
-        (a, b) => b.spanCount - a.spanCount,
-      ),
-    [traceSummary.serviceSummaries],
-  );
 
   const handleToggleOpen = useCallback(() => {
     toggleOpen(traceSummary.traceId);
@@ -118,22 +110,17 @@ const TraceSummaryRow: React.FC<TraceSummaryRowProps> = ({
       <TableRow>
         <CollapsibleTableCell>
           <Collapse in={open} timeout="auto" unmountOnExit>
-            <Box margin={1}>
+            <Box mt={1} mr={1} ml={1} mb={2}>
               <Box display="flex" alignItems="center">
                 <Typography variant="body1" color="textSecondary">
                   Trace ID:
                 </Typography>
                 <TraceIdTypography>{traceSummary.traceId}</TraceIdTypography>
               </Box>
-              <BadgesWrapper>
-                {sortedServiceSummaries.map((serviceSummary) => (
-                  <ServiceBadge
-                    serviceName={serviceSummary.serviceName}
-                    count={serviceSummary.spanCount}
-                    onClick={toggleFilter}
-                  />
-                ))}
-              </BadgesWrapper>
+              <SpanCountChart
+                serviceSummaries={traceSummary.serviceSummaries}
+                toggleFilter={toggleFilter}
+              />
             </Box>
           </Collapse>
         </CollapsibleTableCell>
@@ -189,12 +176,4 @@ const TraceIdTypography = styled(Typography).attrs({
   variant: 'body1',
 })`
   margin-left: ${({ theme }) => theme.spacing(0.5)}px;
-`;
-
-const BadgesWrapper = styled.div`
-  display: flex;
-  flex-wrap: wrap;
-  & > * {
-    margin: ${({ theme }) => theme.spacing(0.5)}px;
-  }
 `;

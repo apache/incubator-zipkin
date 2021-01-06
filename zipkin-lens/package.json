@@ -48,6 +48,8 @@
     "@typescript-eslint/eslint-plugin": "^2.23.0",
     "@typescript-eslint/parser": "^2.23.0",
     "classnames": "^2.2.6",
+    "echarts": "^4.9.0",
+    "echarts-for-react": "^2.0.16",
     "enzyme": "^3.7.0",
     "enzyme-adapter-react-16": "^1.7.0",
     "eslint-config-airbnb-typescript": "^7.0.0",
