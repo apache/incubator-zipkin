@@ -34,7 +34,14 @@ const TraceSummary = React.memo(({ traceSummary }) => {
   const isRootedTrace = hasRootSpan(traceSummary.spans);
   const [rootSpanIndex, setRootSpanIndex] = useState(0);
   const isRerooted = rootSpanIndex !== 0;
-  const [currentSpanIndex, setCurrentSpanIndex] = useState(0);
+
+  // If spanId is present as hash (subresource) make that the currentSpanIndex to load
+  const getSpanIndexOnLoad =
+    window.location.hash !== ''
+      ? findSpanIndex(traceSummary.spans, window.location.hash.substring(1))
+      : 0;
+
+  const [currentSpanIndex, setCurrentSpanIndex] = useState(getSpanIndexOnLoad);
   const [childrenHiddenSpanIndices, setChildrenHiddenSpanIndices] = useState(
     {},
   );
