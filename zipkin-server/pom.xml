@@ -272,6 +272,17 @@
 <!--      <version>0.10.3</version>-->
 <!--      <optional>true</optional>-->
 <!--    </dependency>-->
+    <dependency>
+      <groupId>io.zipkin.brave.cassandra</groupId>
+      <artifactId>brave-instrumentation-cassandra-driver</artifactId>
+      <version>0.10.3</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>io.zipkin.brave</groupId>
+      <artifactId>brave-instrumentation-kafka-clients</artifactId>
+      <optional>true</optional>
+    </dependency>
 
     <!-- Test dependencies -->
     <!-- to test the experimental grpc endpoint with the square/wire library -->

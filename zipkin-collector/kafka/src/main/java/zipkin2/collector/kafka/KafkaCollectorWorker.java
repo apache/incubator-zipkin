@@ -23,10 +23,12 @@ import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
+
+import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,6 +50,7 @@ final class KafkaCollectorWorker implements Runnable {
         public void onError(Throwable t) {}
       };
 
+  final Function<Properties, Consumer<byte[], byte[]>> consumerSupplier;
   final Properties properties;
   final List<String> topics;
   final Collector collector;
@@ -58,6 +61,7 @@ final class KafkaCollectorWorker implements Runnable {
   final AtomicBoolean running = new AtomicBoolean(true);
 
   KafkaCollectorWorker(KafkaCollector.Builder builder) {
+    consumerSupplier = builder.consumerSupplier;
     properties = builder.properties;
     topics = Arrays.asList(builder.topic.split(","));
     collector = builder.delegate.build();
@@ -66,7 +70,7 @@ final class KafkaCollectorWorker implements Runnable {
 
   @Override
   public void run() {
-    try (KafkaConsumer<byte[], byte[]> kafkaConsumer = new KafkaConsumer<>(properties)) {
+    try (Consumer<byte[], byte[]> kafkaConsumer = consumerSupplier.apply(properties)) {
       kafkaConsumer.subscribe(
         topics,
         // added for integration tests only, see ITKafkaCollector
@@ -85,7 +89,8 @@ final class KafkaCollectorWorker implements Runnable {
         });
       LOG.debug("Kafka consumer starting polling loop.");
       while (running.get()) {
-        final ConsumerRecords<byte[], byte[]> consumerRecords = kafkaConsumer.poll(Duration.of(1000, ChronoUnit.MILLIS));
+        final ConsumerRecords<byte[], byte[]> consumerRecords =
+          kafkaConsumer.poll(Duration.of(1000, ChronoUnit.MILLIS));
         LOG.debug("Kafka polling returned batch of {} messages.", consumerRecords.count());
         for (ConsumerRecord<byte[], byte[]> record : consumerRecords) {
           final byte[] bytes = record.value();

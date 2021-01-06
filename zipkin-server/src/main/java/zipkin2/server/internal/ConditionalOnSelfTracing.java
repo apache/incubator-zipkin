@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -60,7 +60,7 @@ public @interface ConditionalOnSelfTracing {
       String selfTracingEnabled = context.getEnvironment()
           .getProperty("zipkin.self-tracing.enabled");
 
-      if (!Boolean.valueOf(selfTracingEnabled)) {
+      if (!Boolean.parseBoolean(selfTracingEnabled)) {
         return ConditionOutcome.noMatch("zipkin.self-tracing.enabled isn't true");
       }
 

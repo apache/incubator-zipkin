@@ -16,6 +16,8 @@ package zipkin2.server.internal.brave;
 import brave.Tracing;
 import brave.context.slf4j.MDCScopeDecorator;
 import brave.http.HttpTracing;
+import brave.kafka.clients.KafkaTracing;
+import brave.messaging.MessagingTracing;
 import brave.propagation.B3Propagation;
 import brave.propagation.CurrentTraceContext;
 import brave.propagation.ThreadLocalSpan;
@@ -108,6 +110,7 @@ public class ZipkinSelfTracingConfiguration {
       // Reduce the impact on untraced downstream http services such as Elasticsearch
       .propagationFactory(B3Propagation.newFactoryBuilder()
         .injectFormat(brave.Span.Kind.CLIENT, B3Propagation.Format.SINGLE)
+        .injectFormat(brave.Span.Kind.CONSUMER, B3Propagation.Format.SINGLE_NO_PARENT)
         .build())
       .addSpanHandler(zipkinSpanHandler)
       .build();
@@ -124,6 +127,14 @@ public class ZipkinSelfTracingConfiguration {
           return false;
         }
       )
+      .build();
+  }
+
+  @Bean KafkaTracing kafkaTracing(Tracing tracing) {
+    final MessagingTracing messagingTracing = MessagingTracing.newBuilder(tracing)
+      .build();
+    return KafkaTracing.newBuilder(messagingTracing)
+      .remoteServiceName("zipkin-kafka")
       .build();
   }
 

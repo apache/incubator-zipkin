@@ -35,8 +35,8 @@ services:
       - MYSQL_HOST=mysql
       # Uncomment to enable self-tracing
       # - SELF_TRACING_ENABLED=true
-      # Uncomment to increase heap size
-      # - JAVA_OPTS=-Xms128m -Xmx128m -XX:+ExitOnOutOfMemoryError
+      # Uncomment to enable debug logging
+      # - JAVA_OPTS=-Dlogging.level.zipkin2=DEBUG
     ports:
       # Port used for the Zipkin UI and HTTP Api
       - 9411:9411

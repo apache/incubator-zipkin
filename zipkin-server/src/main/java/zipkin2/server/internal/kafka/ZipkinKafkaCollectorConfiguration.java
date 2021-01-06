@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,6 +13,13 @@
  */
 package zipkin2.server.internal.kafka;
 
+import brave.kafka.clients.KafkaTracing;
+import java.util.Optional;
+import java.util.Properties;
+import java.util.function.Function;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -23,6 +30,7 @@ import org.springframework.core.type.AnnotatedTypeMetadata;
 import zipkin2.collector.CollectorMetrics;
 import zipkin2.collector.CollectorSampler;
 import zipkin2.collector.kafka.KafkaCollector;
+import zipkin2.server.internal.ConditionalOnSelfTracing;
 import zipkin2.storage.StorageComponent;
 
 /**
@@ -33,15 +41,34 @@ import zipkin2.storage.StorageComponent;
 @Conditional(ZipkinKafkaCollectorConfiguration.KafkaBootstrapServersSet.class)
 @EnableConfigurationProperties(ZipkinKafkaCollectorProperties.class)
 public class ZipkinKafkaCollectorConfiguration { // makes simple type name unique for /actuator/conditions
+  static final String QUALIFIER = "zipkinKafka";
 
-  @Bean(initMethod = "start")
-  KafkaCollector kafka(
-      ZipkinKafkaCollectorProperties properties,
-      CollectorSampler sampler,
-      CollectorMetrics metrics,
-      StorageComponent storage) {
-    return properties.toBuilder().sampler(sampler).metrics(metrics).storage(storage).build();
+  @Bean(initMethod = "start") KafkaCollector kafka(
+    ZipkinKafkaCollectorProperties properties,
+    CollectorSampler sampler,
+    CollectorMetrics metrics,
+    StorageComponent storage,
+    java.util.function.Consumer<KafkaCollector.Builder> kafkaTracing) {
+    final KafkaCollector.Builder builder = properties.toBuilder()
+      .sampler(sampler)
+      .metrics(metrics)
+      .storage(storage);
+    kafkaTracing.accept(builder);
+    return builder.build();
   }
+
+  @Bean @Qualifier(QUALIFIER) @ConditionalOnSelfTracing
+  java.util.function.Consumer<KafkaCollector.Builder> consumerSupplier(
+    Optional<KafkaTracing> maybeKafkaTracing
+  ) {
+    return builder ->
+      builder.consumerSupplier(
+        maybeKafkaTracing
+          .<Function<Properties, Consumer<byte[], byte[]>>>
+            map(kafkaTracing -> props -> kafkaTracing.consumer(new KafkaConsumer<>(props)))
+          .orElseGet(() -> KafkaConsumer::new));
+  }
+
   /**
    * This condition passes when {@link ZipkinKafkaCollectorProperties#getBootstrapServers()} is set
    * to non-empty.
@@ -65,7 +92,7 @@ public class ZipkinKafkaCollectorConfiguration { // makes simple type name uniqu
       return s == null || s.isEmpty();
     }
 
-    private static boolean notFalse(String s){
+    private static boolean notFalse(String s) {
       return s == null || !s.equals("false");
     }
   }

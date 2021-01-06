@@ -21,7 +21,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
+
 import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.KafkaFuture;
@@ -65,6 +69,7 @@ public final class KafkaCollector extends CollectorComponent {
     CollectorMetrics metrics = CollectorMetrics.NOOP_METRICS;
     String topic = "zipkin";
     int streams = 1;
+    Function<Properties, Consumer<byte[], byte[]>> consumerSupplier = KafkaConsumer::new;
 
     @Override
     public Builder storage(StorageComponent storage) {
@@ -113,6 +118,11 @@ public final class KafkaCollector extends CollectorComponent {
     /** Count of threads consuming the topic. Defaults to 1 */
     public Builder streams(int streams) {
       this.streams = streams;
+      return this;
+    }
+
+    public Builder consumerSupplier(Function<Properties, Consumer<byte[], byte[]>> consumerSupplier) {
+      this.consumerSupplier = consumerSupplier;
       return this;
     }
 
