@@ -24,7 +24,6 @@ import com.linecorp.armeria.server.cors.CorsServiceBuilder;
 import com.linecorp.armeria.server.file.HttpFile;
 import com.linecorp.armeria.server.metric.PrometheusExpositionService;
 import com.linecorp.armeria.spring.ArmeriaServerConfigurator;
-import io.micrometer.core.instrument.MeterRegistry;
 import io.prometheus.client.CollectorRegistry;
 import java.time.Duration;
 import java.util.Optional;
@@ -46,7 +45,6 @@ public class ZipkinHttpConfiguration {
     Optional<ZipkinHttpCollector> httpCollector,
     Optional<ZipkinHealthController> healthController,
     Optional<ZipkinMetricsController> metricsController,
-    Optional<MeterRegistry> meterRegistry,
     Optional<CollectorRegistry> collectorRegistry,
     @Value("${zipkin.query.timeout:11s}") Duration queryTimeout) {
     return sb -> {

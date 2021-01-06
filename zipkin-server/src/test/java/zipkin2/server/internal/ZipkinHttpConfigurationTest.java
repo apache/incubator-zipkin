@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -14,9 +14,6 @@
 package zipkin2.server.internal;
 
 import brave.Tracing;
-import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.prometheus.PrometheusConfig;
-import io.micrometer.prometheus.PrometheusMeterRegistry;
 import org.junit.After;
 import org.junit.Test;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
@@ -96,12 +93,7 @@ public class ZipkinHttpConfigurationTest {
       .isEqualTo(false);
   }
 
-  @Configuration
-  public static class Config {
-    @Bean MeterRegistry registry() {
-      return new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
-    }
-
+  @Configuration static class Config {
     @Bean ConversionService conversionService() {
       return ApplicationConversionService.getSharedInstance();
     }

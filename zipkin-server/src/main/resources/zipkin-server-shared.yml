@@ -10,6 +10,11 @@ zipkin:
     traces-per-second: ${SELF_TRACING_TRACES_PER_SECOND:1}
     # Timeout in seconds to flush self-tracing data to storage.
     message-timeout: ${SELF_TRACING_FLUSH_INTERVAL:1}
+  discovery:
+    eureka:
+      enabled: ${DISCOVERY_EUREKA_ENABLED:true}
+      # ex "https://eureka.com:8001/eureka/v2"
+      url: ${EUREKA_URL:}
   collector:
     # percentage to traces to retain
     sample-rate: ${COLLECTOR_SAMPLE_RATE:1.0}

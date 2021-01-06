@@ -136,6 +136,13 @@
       <version>${armeria.version}</version>
     </dependency>
 
+    <!-- Eureka service discovery -->
+    <dependency>
+      <groupId>${armeria.groupId}</groupId>
+      <artifactId>armeria-eureka</artifactId>
+      <version>${armeria.version}</version>
+    </dependency>
+
     <!--Prometheus metrics-->
     <dependency>
       <groupId>io.micrometer</groupId>

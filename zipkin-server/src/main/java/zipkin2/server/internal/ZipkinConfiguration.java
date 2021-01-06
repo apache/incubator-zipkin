@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 The OpenZipkin Authors
+ * Copyright 2015-2020 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -16,6 +16,7 @@ package zipkin2.server.internal;
 import brave.Tracing;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.BeanFactory;
 import org.springframework.beans.factory.BeanFactoryAware;
@@ -49,8 +50,9 @@ public class ZipkinConfiguration {
     return CollectorSampler.create(rate);
   }
 
-  @Bean CollectorMetrics metrics(MeterRegistry registry) {
-    return new MicrometerCollectorMetrics(registry);
+  @Bean CollectorMetrics metrics(Optional<MeterRegistry> registry) {
+    return registry.<CollectorMetrics>map(MicrometerCollectorMetrics::new)
+      .orElse(CollectorMetrics.NOOP_METRICS);
   }
 
   @EnableConfigurationProperties(ZipkinStorageThrottleProperties.class)

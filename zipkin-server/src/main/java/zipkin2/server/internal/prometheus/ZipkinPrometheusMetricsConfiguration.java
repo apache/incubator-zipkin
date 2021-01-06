@@ -45,7 +45,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 import org.springframework.util.StringUtils;
 
-@Configuration(proxyBeanMethods=false)
+@Configuration(proxyBeanMethods = false)
 public class ZipkinPrometheusMetricsConfiguration {
   // from io.micrometer.spring.web.servlet.WebMvcTags
   private static final Tag URI_NOT_FOUND = Tag.of("uri", "NOT_FOUND");
