@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2020 The OpenZipkin Authors
+ * Copyright 2015-2021 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -16,24 +16,25 @@ import React from 'react';
 
 import render from '../../test/util/render-with-default-settings';
 
-import TraceSummaryHeader from './TraceSummaryHeader';
+import TracePageHeader from './TracePageHeader';
 
 describe('<TraceSummaryHeader />', () => {
+  const traceSummary = {
+    traceId: '1',
+    spans: [],
+    serviceNameAndSpanCounts: [],
+    duration: 1,
+    durationStr: '1μs',
+    rootSpan: {
+      serviceName: 'service-A',
+      spanName: 'span-A',
+    },
+    depth: 0,
+  };
+
   it('renders download JSON button', () => {
     const { getByTestId } = render(
-      <TraceSummaryHeader
-        traceSummary={{
-          traceId: '1',
-          spans: [],
-          serviceNameAndSpanCounts: [],
-          duration: 1,
-          durationStr: '1μs',
-          rootSpan: {
-            serviceName: 'service-A',
-            spanName: 'span-A',
-          },
-        }}
-      />,
+      <TracePageHeader traceSummary={traceSummary} />,
     );
     const downloadJson = getByTestId('download-json-link');
     expect(downloadJson).toBeInTheDocument();
@@ -43,38 +44,14 @@ describe('<TraceSummaryHeader />', () => {
 
   it('does not render View Logs link with default config', () => {
     const { queryByTestId } = render(
-      <TraceSummaryHeader
-        traceSummary={{
-          traceId: '1',
-          spans: [],
-          serviceNameAndSpanCounts: [],
-          duration: 1,
-          durationStr: '1μs',
-          rootSpan: {
-            serviceName: 'service-A',
-            spanName: 'span-A',
-          },
-        }}
-      />,
+      <TracePageHeader traceSummary={traceSummary} />,
     );
     expect(queryByTestId('view-logs-link')).not.toBeInTheDocument();
   });
 
   it('does render View Logs link when logs URL in config', () => {
     const { queryByTestId } = render(
-      <TraceSummaryHeader
-        traceSummary={{
-          traceId: '1',
-          spans: [],
-          serviceNameAndSpanCounts: [],
-          duration: 1,
-          durationStr: '1μs',
-          rootSpan: {
-            serviceName: 'service-A',
-            spanName: 'span-A',
-          },
-        }}
-      />,
+      <TracePageHeader traceSummary={traceSummary} />,
       { uiConfig: { logsUrl: 'http://zipkin.io/logs={traceId}' } },
     );
     const logsLink = queryByTestId('view-logs-link');
@@ -87,19 +64,7 @@ describe('<TraceSummaryHeader />', () => {
 
   it('does replace multiple instances of {traceId} in logsUrl', () => {
     const { queryByTestId } = render(
-      <TraceSummaryHeader
-        traceSummary={{
-          traceId: '1',
-          spans: [],
-          serviceNameAndSpanCounts: [],
-          duration: 1,
-          durationStr: '1μs',
-          rootSpan: {
-            serviceName: 'service-A',
-            spanName: 'span-A',
-          },
-        }}
-      />,
+      <TracePageHeader traceSummary={traceSummary} />,
       {
         uiConfig: {
           logsUrl: 'http://zipkin.io/logs={traceId}&moreLogs={traceId}',
@@ -116,38 +81,14 @@ describe('<TraceSummaryHeader />', () => {
 
   it('does not render Archive Trace link with default config', () => {
     const { queryByTestId } = render(
-      <TraceSummaryHeader
-        traceSummary={{
-          traceId: '1',
-          spans: [],
-          serviceNameAndSpanCounts: [],
-          duration: 1,
-          durationStr: '1μs',
-          rootSpan: {
-            serviceName: 'service-A',
-            spanName: 'span-A',
-          },
-        }}
-      />,
+      <TracePageHeader traceSummary={traceSummary} />,
     );
     expect(queryByTestId('archive-trace-link')).not.toBeInTheDocument();
   });
 
   it('does render Archive Trace link when logs URL in config', () => {
     const { queryByTestId } = render(
-      <TraceSummaryHeader
-        traceSummary={{
-          traceId: '1',
-          spans: [],
-          serviceNameAndSpanCounts: [],
-          duration: 1,
-          durationStr: '1μs',
-          rootSpan: {
-            serviceName: 'service-A',
-            spanName: 'span-A',
-          },
-        }}
-      />,
+      <TracePageHeader traceSummary={traceSummary} />,
       { uiConfig: { archivePostUrl: 'http://localhost:9411/api/v2/spans' } },
     );
     const logsLink = queryByTestId('archive-trace-link');
