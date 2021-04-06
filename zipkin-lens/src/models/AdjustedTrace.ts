@@ -28,7 +28,7 @@ export type AdjustedSpan = {
   parentId?: string;
   childIds: string[];
   serviceNames: string[];
-  timestamp: number;
+  timestamp?: number;
   duration: number;
   durationStr: string;
   tags: {

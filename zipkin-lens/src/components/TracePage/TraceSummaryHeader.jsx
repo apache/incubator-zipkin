@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2020 The OpenZipkin Authors
+ * Copyright 2015-2021 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,7 +13,6 @@
  */
 import { t, Trans } from '@lingui/macro';
 import { useLingui } from '@lingui/react';
-import PropTypes from 'prop-types';
 import React, { useCallback } from 'react';
 import { useDispatch } from 'react-redux';
 import { faDownload, faFileAlt } from '@fortawesome/free-solid-svg-icons';
@@ -28,17 +27,20 @@ import { setAlert } from '../App/slice';
 
 import { useUiConfig } from '../UiConfig';
 
-import { detailedTraceSummaryPropTypes } from '../../prop-types';
+import {
+  detailedSpanPropTypes,
+  detailedTraceSummaryPropTypes,
+} from '../../prop-types';
 import * as api from '../../constants/api';
 
 const propTypes = {
   traceSummary: detailedTraceSummaryPropTypes,
-  rootSpanIndex: PropTypes.number,
+  rootSpan: detailedSpanPropTypes,
 };
 
 const defaultProps = {
   traceSummary: null,
-  rootSpanIndex: 0,
+  rootSpan: null,
 };
 
 const useStyles = makeStyles((theme) => ({
@@ -91,7 +93,7 @@ const useStyles = makeStyles((theme) => ({
   },
 }));
 
-const TraceSummaryHeader = React.memo(({ traceSummary, rootSpanIndex }) => {
+const TraceSummaryHeader = React.memo(({ traceSummary, rootSpan }) => {
   const dispatch = useDispatch();
   const classes = useStyles();
   const { i18n } = useLingui();
@@ -191,10 +193,9 @@ const TraceSummaryHeader = React.memo(({ traceSummary, rootSpanIndex }) => {
         { label: i18n._(t`Total Spans`), value: traceSummary.spans.length },
         {
           label: i18n._(t`Trace ID`),
-          value:
-            rootSpanIndex === 0
-              ? traceSummary.traceId
-              : `${traceSummary.traceId} - ${traceSummary.spans[rootSpanIndex].spanId}`,
+          value: !rootSpan
+            ? traceSummary.traceId
+            : `${traceSummary.traceId} - ${rootSpan.spanId}`,
         },
       ].map((entry) => (
         <Box key={entry.label} className={classes.traceInfoEntry}>

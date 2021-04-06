@@ -14,9 +14,10 @@
 import { t, Trans } from '@lingui/macro';
 import { useLingui } from '@lingui/react';
 import PropTypes from 'prop-types';
-import React from 'react';
+import React, { useCallback } from 'react';
 import { makeStyles } from '@material-ui/styles';
 import Box from '@material-ui/core/Box';
+import { Button } from '@material-ui/core';
 import Typography from '@material-ui/core/Typography';
 
 import SpanTags from './SpanTags';
@@ -25,7 +26,7 @@ import { detailedSpanPropTypes } from '../../../prop-types';
 
 const propTypes = {
   span: detailedSpanPropTypes.isRequired,
-  minHeight: PropTypes.number.isRequired,
+  reroot: PropTypes.func.isRequired,
 };
 
 const useStyles = makeStyles((theme) => ({
@@ -33,6 +34,8 @@ const useStyles = makeStyles((theme) => ({
     width: '100%',
     borderLeft: `1px solid ${theme.palette.grey[300]}`,
     backgroundColor: theme.palette.grey[100],
+    height: '100%',
+    overflow: 'auto',
   },
   serviceName: {
     textTransform: 'uppercase',
@@ -75,9 +78,13 @@ const useStyles = makeStyles((theme) => ({
   },
 }));
 
-const SpanDetail = React.memo(({ span, minHeight }) => {
+const SpanDetail = React.memo(({ span, reroot }) => {
   const classes = useStyles();
   const { i18n } = useLingui();
+
+  const handleRerootButtonClick = useCallback(() => {
+    reroot(span.spanId);
+  }, [span.spanId, reroot]);
 
   const spanIds = (
     <Box className={classes.spanIds}>
@@ -96,14 +103,23 @@ const SpanDetail = React.memo(({ span, minHeight }) => {
   );
 
   return (
-    <Box minHeight={minHeight} className={classes.root}>
+    <Box className={classes.root}>
       <Box pt={2} pl={2} pr={2} pb={1.5}>
         <Typography variant="h5" className={classes.serviceName}>
           {span.serviceName}
         </Typography>
-        <Typography variant="h6" className={classes.spanName}>
-          {span.spanName}
-        </Typography>
+        <Box display="flex" justifyContent="space-between">
+          <Typography variant="h6" className={classes.spanName}>
+            {span.spanName}
+          </Typography>
+          <Button
+            onClick={handleRerootButtonClick}
+            variant="outlined"
+            size="small"
+          >
+            Reroot
+          </Button>
+        </Box>
       </Box>
       {spanIds}
       <Box className={classes.annotationsAndTagsBox}>

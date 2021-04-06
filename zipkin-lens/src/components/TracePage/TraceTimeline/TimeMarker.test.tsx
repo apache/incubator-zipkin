@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2020 The OpenZipkin Authors
+ * Copyright 2015-2021 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -21,7 +21,7 @@ describe('<TimeMarker />', () => {
   // 10μs        40μs        70μs       100μs
   it('should render time markers', () => {
     const { queryAllByTestId } = render(
-      <TimeMarker startTs={10} endTs={100} />,
+      <TimeMarker startTs={10} endTs={100} treeWidthPercent={8} />,
     );
     const markers = queryAllByTestId('TimeMarker-marker');
     expect(markers.length).toBe(4);
@@ -32,7 +32,7 @@ describe('<TimeMarker />', () => {
   });
   it('should render labels correctly', () => {
     const { queryAllByTestId } = render(
-      <TimeMarker startTs={10} endTs={100} />,
+      <TimeMarker startTs={10} endTs={100} treeWidthPercent={8} />,
     );
     const labels = queryAllByTestId('TimeMarker-label');
     expect(labels.length).toBe(4);
