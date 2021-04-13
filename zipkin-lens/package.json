@@ -20,6 +20,7 @@
     "@lingui/macro": "3.0.0-13",
     "@lingui/react": "3.0.0-13",
     "@material-ui/core": "^4.1.1",
+    "@material-ui/data-grid": "^4.0.0-alpha.23",
     "@material-ui/icons": "^4.9.1",
     "@material-ui/lab": "^4.0.0-alpha.50",
     "@material-ui/pickers": "^3.1.1",
